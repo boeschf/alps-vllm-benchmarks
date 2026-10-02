@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 
 from provenance import (
     artifact_inventory,
@@ -30,6 +31,7 @@ SUMMARY_FIELDS = (
     "name",
     "scenario",
     "input_len",
+    "effective_input_len",
     "output_len",
     "prompts",
     "concurrency",
@@ -83,6 +85,57 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
 # Convert an arbitrary label into a stable identifier component.
 def slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+# Verify both raw-token and chat-template tokenization through the serving endpoint.
+def verify_token_alignment(base_url: str, model: str) -> dict[str, Any]:
+    endpoint = f"{base_url.rstrip('/')}/tokenize"
+    probe = "benchmark token alignment probe"
+
+    def token_count(payload: dict[str, Any]) -> int:
+        request = Request(
+            endpoint,
+            data=json.dumps({"model": model, **payload}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                result = json.load(response)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"mandatory token alignment failed at {endpoint}: {error}"
+            ) from error
+        tokens = result.get("tokens") if isinstance(result, dict) else None
+        if not isinstance(tokens, list) or not all(
+            isinstance(token, int) for token in tokens
+        ):
+            raise RuntimeError(
+                f"mandatory token alignment returned an invalid response from {endpoint}"
+            )
+        return len(tokens)
+
+    raw_tokens = token_count({"prompt": probe, "add_special_tokens": False})
+    post_template_tokens = token_count(
+        {
+            "messages": [{"role": "user", "content": probe}],
+            "add_generation_prompt": True,
+            "add_special_tokens": False,
+        }
+    )
+    overhead = post_template_tokens - raw_tokens
+    if overhead < 0:
+        raise RuntimeError(
+            "chat template removed tokens from the alignment probe: "
+            f"raw={raw_tokens}, post_template={post_template_tokens}"
+        )
+    return {
+        "endpoint": endpoint,
+        "model": model,
+        "raw_probe_tokens": raw_tokens,
+        "post_template_probe_tokens": post_template_tokens,
+        "chat_template_token_overhead": overhead,
+    }
 
 
 # Parse benchmark execution and provenance options.
@@ -152,6 +205,7 @@ def main() -> int:
         if cache_publication_path.is_file()
         else {"status": "not-published", "mode": os.getenv("JIT_CACHE_MODE", "off")}
     )
+    token_alignment = verify_token_alignment(args.base_url, args.served_model_name)
     suite_identity = {
         "path": str(
             suite_path.relative_to(ROOT) if suite_path.is_relative_to(ROOT) else suite_path
@@ -163,6 +217,7 @@ def main() -> int:
         "dataset": "random",
         "ignore_eos": True,
         "temperature": BENCHMARK_TEMPERATURE,
+        "token_alignment": token_alignment,
     }
     model_for_fingerprint = {key: value for key, value in model.items() if key != "path"}
     experiment_identity = {
@@ -215,6 +270,7 @@ def main() -> int:
         "edf": {"path": str(edf_path), "sha256": file_sha256(edf_path)},
         "scenario": scenario,
         "suite": suite_identity,
+        "token_alignment": token_alignment,
         "slurm": {
             "job_id": os.getenv("SLURM_JOB_ID"),
             "account": os.getenv("SLURM_JOB_ACCOUNT"),
@@ -233,10 +289,14 @@ def main() -> int:
     bencher: dict[str, dict[str, dict[str, float]]] = {}
     try:
         for index, point in enumerate(points, start=1):
+            effective_input_len = (
+                point["input_len"] + token_alignment["chat_template_token_overhead"]
+            )
             print(
                 f"[{index}/{len(points)}] {point['name']}: "
-                f"in={point['input_len']} out={point['output_len']} "
-                f"prompts={point['prompts']} concurrency={point['concurrency']}",
+                f"in={point['input_len']} effective_in={effective_input_len} "
+                f"out={point['output_len']} prompts={point['prompts']} "
+                f"concurrency={point['concurrency']}",
                 flush=True,
             )
             raw_file = raw_dir / f"{point['name']}.json"
@@ -251,7 +311,7 @@ def main() -> int:
                 "--base-url",
                 args.base_url,
                 "--model",
-                args.model,
+                args.served_model_name,
                 "--served-model-name",
                 args.served_model_name,
                 "--tokenizer",
@@ -295,9 +355,21 @@ def main() -> int:
                 raise RuntimeError(
                     f"{point['name']}: completed={completed}/{point['prompts']}, failed={failed}"
                 )
+            total_input_tokens = result.get("total_input_tokens")
+            if not isinstance(total_input_tokens, int):
+                raise RuntimeError(
+                    f"{point['name']}: vLLM result is missing integer total_input_tokens"
+                )
+            expected_input_tokens = effective_input_len * completed
+            if total_input_tokens != expected_input_tokens:
+                raise RuntimeError(
+                    f"{point['name']}: post-template input length mismatch: "
+                    f"observed={total_input_tokens}, expected={expected_input_tokens} "
+                    f"({effective_input_len} per request)"
+                )
 
-            row = dict(point)
-            for field in SUMMARY_FIELDS[6:]:
+            row = {**point, "effective_input_len": effective_input_len}
+            for field in BENCHER_MEASURES:
                 if field not in result:
                     raise RuntimeError(f"{point['name']}: vLLM result is missing {field}")
                 row[field] = float(result[field])
@@ -308,6 +380,8 @@ def main() -> int:
             manifest["points"].append(
                 {
                     **point,
+                    "effective_input_len": effective_input_len,
+                    "total_input_tokens": total_input_tokens,
                     "raw_result": str(raw_file.relative_to(output_dir)),
                     "raw_sha256": file_sha256(raw_file),
                     "command": command,

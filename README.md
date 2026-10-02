@@ -180,6 +180,11 @@ The standard suite contains 11 points:
 All points use deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
 to zero.
 
+The benchmark requires the server `/tokenize` endpoint, verifies raw and chat-template tokenization
+before measurement, and fails if measured input-token totals differ from the expected
+post-template lengths. `summary.tsv` records both requested `input_len` and
+`effective_input_len`.
+
 Each completed run is written under `results/<run-id>/`:
 
 ```text
