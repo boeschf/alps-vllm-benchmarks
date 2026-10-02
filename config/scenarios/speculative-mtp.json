@@ -1,0 +1,13 @@
+{
+  "id": "speculative-mtp",
+  "description": "GLM MTP speculative decoding with three speculative tokens, matching production.",
+  "server": {
+    "speculative-config": {
+      "method": "mtp",
+      "num_speculative_tokens": 3
+    }
+  },
+  "features": {
+    "speculative_decoding": "mtp-3"
+  }
+}

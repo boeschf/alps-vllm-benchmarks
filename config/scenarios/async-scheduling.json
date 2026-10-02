@@ -1,0 +1,10 @@
+{
+  "id": "async-scheduling",
+  "description": "Overlap CPU scheduling with accelerator execution.",
+  "server": {
+    "async-scheduling": true
+  },
+  "features": {
+    "async_scheduling": true
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "prefix-caching",
+  "description": "Enable the local GPU prefix cache without an external KV connector.",
+  "server": {
+    "enable-prefix-caching": true
+  },
+  "features": {
+    "local_prefix_caching": true
+  }
+}

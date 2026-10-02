@@ -1,0 +1,26 @@
+{
+  "id": "uccl-ll",
+  "description": "UCCL-EP through the DeepEP-compatible low-latency backend for decode-heavy traffic.",
+  "server": {
+    "all2all-backend": "deepep_low_latency"
+  },
+  "environment": {
+    "FI_PROVIDER": "cxi",
+    "UCCL_EP_TRANSPORT": "cxi",
+    "FI_CXI_ENABLE_WRITEDATA": "1",
+    "UCCL_EP_CPU_TIMEOUT_SECS": "600",
+    "VLLM_DEEPEP_BUFFER_SIZE_MB": "1024"
+  },
+  "platform_overrides": {
+    "rocm": {
+      "server": {
+        "kv-cache-dtype": "auto",
+        "gpu-memory-utilization": 0.7,
+        "enforce-eager": true
+      }
+    }
+  },
+  "features": {
+    "uccl_ep": "low_latency"
+  }
+}

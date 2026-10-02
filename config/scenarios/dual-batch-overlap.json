@@ -1,0 +1,10 @@
+{
+  "id": "dual-batch-overlap",
+  "description": "Overlap communication and computation with vLLM dual batch overlap.",
+  "server": {
+    "enable-dbo": true
+  },
+  "features": {
+    "dual_batch_overlap": true
+  }
+}

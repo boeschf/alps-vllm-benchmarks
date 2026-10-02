@@ -1,0 +1,11 @@
+{
+  "id": "offload-uva",
+  "description": "Offload up to 16 GiB of model weights per GPU through unified virtual addressing.",
+  "server": {
+    "offload-backend": "uva",
+    "cpu-offload-gb": 16
+  },
+  "features": {
+    "weight_cpu_offload": "uva"
+  }
+}

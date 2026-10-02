@@ -1,0 +1,35 @@
+{
+  "id": "mooncake-cpu",
+  "description": "Mooncake distributed-store KV cache backed by an embedded 8 GiB CPU segment per rank.",
+  "server": {
+    "enable-prefix-caching": true,
+    "kv-transfer-config": {
+      "kv_connector": "MooncakeStoreConnector",
+      "kv_role": "kv_both",
+      "kv_load_failure_policy": "recompute",
+      "kv_connector_extra_config": {
+        "cache_prefix": "glm-5-3-fp8",
+        "load_async": true,
+        "lookup_async": true
+      }
+    }
+  },
+  "features": {
+    "external_kv_transfer": true,
+    "kv_cpu_offload": "mooncake_store"
+  },
+  "services": {
+    "mooncake_store": {
+      "enabled": true,
+      "master_port": 50051,
+      "mode": "embedded",
+      "metadata_server": "P2PHANDSHAKE",
+      "global_segment_size": "8GB",
+      "local_buffer_size": "1GB",
+      "protocol": "rdma",
+      "device_name": "",
+      "enable_offload": false,
+      "tenant_id": "glm-5-3-benchmark"
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "offload-prefetch",
+  "description": "Asynchronously offload two layers per eight-layer group and prefetch one layer ahead.",
+  "server": {
+    "offload-backend": "prefetch",
+    "cpu-offload-gb": 0,
+    "offload-group-size": 8,
+    "offload-num-in-group": 2,
+    "offload-prefetch-step": 1
+  },
+  "features": {
+    "weight_cpu_offload": "prefetch"
+  }
+}
