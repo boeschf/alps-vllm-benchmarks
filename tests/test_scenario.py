@@ -33,12 +33,16 @@ class ScenarioAllocationTests(unittest.TestCase):
         )
         self.assertEqual(resolved["environment"]["VLLM_ROCM_USE_AITER"], "1")
 
-    def test_cuda_keeps_automatic_numa_binding(self) -> None:
+    def test_cuda_uses_explicit_gh200_numa_binding(self) -> None:
         resolved = resolve_scenario("baseline", "cuda")
+        server = resolved["server"]
 
-        self.assertTrue(resolved["server"]["numa-bind"])
-        self.assertNotIn("numa-bind-nodes", resolved["server"])
-        self.assertNotIn("numa-bind-cpus", resolved["server"])
+        self.assertTrue(server["numa-bind"])
+        self.assertEqual(server["numa-bind-nodes"], [0, 1, 2, 3])
+        self.assertEqual(
+            server["numa-bind-cpus"],
+            ["0-71", "72-143", "144-215", "216-287"],
+        )
 
 
     def test_scalable_scenario_accepts_larger_allocation(self) -> None:
