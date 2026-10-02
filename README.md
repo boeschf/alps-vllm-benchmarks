@@ -85,7 +85,7 @@ and emits the exact vLLM YAML plus `scenario.env`. Components compose with `+`.
 
 | Scenario | Change | Constraints or notes |
 |---|---|---|
-| `baseline` (default) | `allgather_reducescatter` | TP=2; external KV and prefix caching off |
+| `baseline` (default) | `allgather_reducescatter` | TP=2; BF16 KV cache; external KV and prefix caching off |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; intended for decode-heavy traffic |
 | `uccl-ht` | `deepep_high_throughput` | `deep_gemm`, GPU memory 0.80; intended for prefill-heavy experiments |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
@@ -100,8 +100,8 @@ and emits the exact vLLM YAML plus `scenario.env`. Components compose with `+`.
 | `production` | Production K8s parity settings | Exactly eight CUDA nodes, TP=4, MTP, EPLB, and MooncakeStore |
 
 The resolver rejects the incompatibilities it explicitly encodes; ordered overlays otherwise use
-normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses BF16 KV cache, 0.70 GPU
-memory utilization, and eager execution. Evidence from the predecessor investigation found the
+normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
+utilization and eager execution. Evidence from the predecessor investigation found the
 high-throughput backend unsuitable for decode, but `uccl-ht` remains available as a standalone
 prefill-heavy experiment. `disaggregated-pd` uses high throughput for prefill and low latency for
 decode.

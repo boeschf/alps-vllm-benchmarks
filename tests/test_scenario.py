@@ -19,6 +19,7 @@ class ScenarioAllocationTests(unittest.TestCase):
             resolved["server"]["chat-template-content-format"],
             "openai",
         )
+        self.assertEqual(resolved["server"]["kv-cache-dtype"], "bfloat16")
 
     def test_rocm_uses_explicit_mi300a_numa_binding(self) -> None:
         resolved = resolve_scenario("baseline", "rocm")
