@@ -3,7 +3,7 @@
 #SBATCH --account=csstaff
 #SBATCH --partition=normal
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=288
+##SBATCH --cpus-per-task=288
 ##SBATCH --gres=gpu:4
 #SBATCH --time=02:00:00
 #SBATCH --exclusive
@@ -145,7 +145,7 @@ echo "scenario=${SCENARIO_ID} mode=${SERVING_MODE} TP=${TP_SIZE} all2all=${ALL2A
 
 WORKER_ARGS=(
   --distribution=block:cyclic
-  --cpu-bind=sockets
+  --cpu-bind=none
   --export="ALL,${ENVVARS}"
   --container-env="${ENVVARS}"
   --network=disable_rdzv_get

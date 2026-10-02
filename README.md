@@ -146,7 +146,8 @@ DP = 8
 EP = DP x TP = 16
 ```
 
-Distributed serving steps use `--distribution=block:cyclic` and `--cpu-bind=sockets`.
+Distributed serving steps use `--distribution=block:cyclic` and leave Slurm CPU binding disabled;
+vLLM binds accelerator workers to their local NUMA resources.
 The default single service uses all allocated nodes; its OpenAI-compatible endpoint is served on
 port 8000 of the first allocated node. After readiness, the job performs one real chat completion.
 Without a benchmark suite or `--smoke-only`, the server remains active until the job is cancelled.

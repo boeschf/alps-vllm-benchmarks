@@ -140,7 +140,7 @@ def main() -> int:
         "data_parallel_size": dp_size,
         "expert_parallel_size": dp_size * tp_size,
         "rank_distribution": "block:cyclic",
-        "cpu_bind": "sockets",
+        "cpu_bind": "none",
     }
     repository = repository_identity(ROOT)
     model = model_identity(Path(args.model), os.getenv("MODEL_REPO", "zai-org/GLM-5.3"))

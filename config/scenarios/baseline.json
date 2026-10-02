@@ -54,6 +54,35 @@
     "PYTHONHASHSEED": "0",
     "VLLM_ENGINE_READY_TIMEOUT_S": "7200"
   },
+  "platform_overrides": {
+    "cuda": {
+      "server": {
+        "numa-bind": true,
+        "numa-bind-nodes": [0, 1, 2, 3],
+        "numa-bind-cpus": [
+          "0-71",
+          "72-143",
+          "144-215",
+          "216-287"
+        ]
+      }
+    },
+    "rocm": {
+      "environment": {
+        "VLLM_ROCM_USE_AITER": "1"
+      },
+      "server": {
+        "numa-bind": true,
+        "numa-bind-nodes": [0, 1, 2, 3],
+        "numa-bind-cpus": [
+          "0-23,96-119",
+          "24-47,120-143",
+          "48-71,144-167",
+          "72-95,168-191"
+        ]
+      }
+    }
+  },
   "features": {
     "external_kv_transfer": false,
     "kv_cpu_offload": false,
