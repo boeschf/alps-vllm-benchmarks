@@ -1,0 +1,45 @@
+# vLLM CUDA runtime settings; config/platforms/cuda.env owns the image pin.
+image = "${IMAGE_REF}"
+
+# Keep project outputs writable, but expose the selected checkpoint through a
+# stable read-only container path independent of its host storage location.
+mounts = [
+  "${PWD}:${PWD}",
+  "${MODEL_SOURCE}:${MODEL_CONTAINER}:ro",
+]
+
+workdir = "${PWD}"
+writable = true
+
+entrypoint = true
+
+[annotations]
+com.hooks.cxi.enabled = "false"
+com.hooks.netstack.source = "host"
+
+[env]
+PMIX_MCA_psec = "native"
+
+# Live JIT/compile caches use container-local /tmp. The serving launcher
+# hydrates them from and publishes them to immutable snapshots under
+# ${PWD}/.cache/jit; compiler processes never write directly to NFS.
+FLASHINFER_WORKSPACE_BASE = "/tmp/flashinfer-cache"
+TRITON_CACHE_DIR = "/tmp/triton-cache"
+TORCHINDUCTOR_CACHE_DIR = "/tmp/inductor-cache"
+TORCH_EXTENSIONS_DIR = "/tmp/torch-extensions"
+VLLM_CACHE_ROOT = "/tmp/vllm-cache"
+TRTLLM_DG_CACHE_DIR = "/tmp/tensorrt-llm-cache"
+# Broad application caches are intentionally ephemeral and excluded from the
+# persistent compiler snapshot.
+TORCH_HOME = "/tmp/torch-cache"
+XDG_CACHE_HOME = "/tmp/xdg-cache"
+
+# vLLM clamps torch intra-op threads to 1 when this is unset. Pin it
+# explicitly so thread behavior is recorded and reproducible.
+OMP_NUM_THREADS = "4"
+# Cap JIT compile parallelism: FlashInfer's ninja defaults to one job per core,
+# and ~70 parallel nvcc/cicc processes each need GiB of host RAM. Combined with
+# weight-loading page cache this OOM-killed the vLLM workers (job 4958098,
+# MaxRSS 178 GiB/node). Fewer parallel compilers = slower JIT but bounded RAM;
+# the cache in /tmp makes the cost one-time per node.
+MAX_JOBS = "8"

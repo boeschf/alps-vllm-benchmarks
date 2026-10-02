@@ -1,0 +1,12 @@
+name	scenario	input_len	output_len	prompts	concurrency
+conc-c1	concurrency	1024	128	16	1
+conc-c4	concurrency	1024	128	16	4
+conc-c16	concurrency	1024	128	64	16
+conc-c32	concurrency	1024	128	128	32
+conc-c64	concurrency	1024	128	256	64
+prefill-1k	prefill	1024	32	16	8
+prefill-4k	prefill	4096	32	16	8
+prefill-16k	prefill	16384	32	16	8
+decode-128	decode	256	128	16	8
+decode-512	decode	256	512	16	8
+decode-1024	decode	256	1024	16	8

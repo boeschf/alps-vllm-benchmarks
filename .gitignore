@@ -1,0 +1,17 @@
+# Slurm and server output
+logs/*
+!logs/.gitkeep
+*.out
+*.err
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local caches and temporary benchmark state
+.cache/
+.bench-tmp/
+models/
+tools/bin/
+*.swp

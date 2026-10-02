@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "id": "baseline",
+  "description": "Explicit vLLM baseline without UCCL, external KV transfer, EPLB, speculation, or weight offload.",
+  "mode": "single",
+  "constraints": {
+    "min_nodes": 4,
+    "platforms": ["cuda", "rocm"]
+  },
+  "topology": {
+    "tensor_parallel_size": 2
+  },
+  "server": {
+    "runner": "generate",
+    "convert": "none",
+    "tokenizer-mode": "auto",
+    "trust-remote-code": false,
+    "dtype": "auto",
+    "seed": 0,
+    "served-model-name": "glm-5.3",
+    "max-model-len": 32768,
+    "gpu-memory-utilization": 0.95,
+    "kv-cache-dtype": "fp8",
+    "max-num-seqs": 16,
+    "max-num-batched-tokens": 2048,
+    "enable-prefix-caching": false,
+    "enable-expert-parallel": true,
+    "all2all-backend": "allgather_reducescatter",
+    "enable-eplb": false,
+    "enable-dbo": false,
+    "async-scheduling": false,
+    "disable-custom-all-reduce": false,
+    "enforce-eager": false,
+    "numa-bind": true,
+    "cpu-offload-gb": 0,
+    "offload-backend": "auto",
+    "offload-group-size": 0,
+    "offload-num-in-group": 1,
+    "offload-prefetch-step": 1,
+    "chat-template-content-format": "string",
+    "enable-auto-tool-choice": true,
+    "tool-call-parser": "glm47",
+    "reasoning-parser": "glm45",
+    "enable-prompt-tokens-details": false,
+    "enable-log-requests": false,
+    "disable-uvicorn-access-log": true,
+    "uvicorn-log-level": "warning",
+    "disable-log-stats": false,
+    "aggregate-engine-logging": true
+  },
+  "environment": {
+    "HF_HUB_OFFLINE": "1",
+    "PYTHONFAULTHANDLER": "1",
+    "PYTHONHASHSEED": "0",
+    "VLLM_ENGINE_READY_TIMEOUT_S": "7200"
+  },
+  "features": {
+    "external_kv_transfer": false,
+    "kv_cpu_offload": false,
+    "weight_cpu_offload": false,
+    "speculative_decoding": false,
+    "disaggregated_prefill_decode": false
+  },
+  "services": {}
+}
