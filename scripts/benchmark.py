@@ -25,6 +25,7 @@ from provenance import (
 from script_utils import atomic_json, canonical_sha256, file_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
+BENCHMARK_TEMPERATURE = 0.0
 SUMMARY_FIELDS = (
     "name",
     "scenario",
@@ -161,6 +162,7 @@ def main() -> int:
         "seed": 0,
         "dataset": "random",
         "ignore_eos": True,
+        "temperature": BENCHMARK_TEMPERATURE,
     }
     model_for_fingerprint = {key: value for key, value in model.items() if key != "path"}
     experiment_identity = {
@@ -255,6 +257,8 @@ def main() -> int:
                 "--tokenizer",
                 args.model,
                 "--ignore-eos",
+                "--temperature",
+                str(BENCHMARK_TEMPERATURE),
                 "--dataset-name",
                 "random",
                 "--input-len",

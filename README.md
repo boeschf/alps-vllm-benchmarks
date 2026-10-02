@@ -177,6 +177,9 @@ The standard suite contains 11 points:
 - prefill scaling at concurrency 8 with 1K, 4K, and 16K input tokens;
 - decode scaling at concurrency 8 with 128, 512, and 1024 output tokens.
 
+All points use deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
+to zero.
+
 Each completed run is written under `results/<run-id>/`:
 
 ```text
