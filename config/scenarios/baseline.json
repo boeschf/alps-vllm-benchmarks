@@ -37,7 +37,7 @@
     "offload-group-size": 0,
     "offload-num-in-group": 1,
     "offload-prefetch-step": 1,
-    "chat-template-content-format": "string",
+    "chat-template-content-format": "openai",
     "enable-auto-tool-choice": true,
     "tool-call-parser": "glm47",
     "reasoning-parser": "glm45",
