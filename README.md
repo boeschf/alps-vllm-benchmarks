@@ -263,6 +263,10 @@ Publication metadata comes from the manifest:
 - branch and hash: the measured repository state;
 - publishable: true only for a clean worktree.
 
+Known generated paths and root-level Linux core dumps are excluded from source identity. Other
+untracked files remain fingerprinted and make the run non-publishable because they may affect the
+measured code or configuration.
+
 `BENCHER_PROJECT`, `BENCHER_TESTBED`, `BENCHER_BRANCH`, `BENCHER_SPEC`, and `BENCHER_HASH` may
 deliberately override manifest values. The publisher rejects incomplete runs and dirty-tree runs
 unless `BENCHER_HASH` is supplied explicitly.

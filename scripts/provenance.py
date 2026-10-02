@@ -13,6 +13,7 @@ from script_utils import canonical_sha256, file_sha256
 
 EXCLUDED_SOURCE_PARTS = {".git", "__pycache__", "logs", "models", "results"}
 EXCLUDED_SOURCE_SUFFIXES = {".pyc", ".pyo", ".swp", ".swo", ".swn"}
+EXCLUDED_ROOT_SOURCE_GLOBS = ("core", "core.[0-9]*", "core_nid[0-9]*_[0-9]*")
 MODEL_METADATA_FILES = (
     "config.json",
     "generation_config.json",
@@ -37,8 +38,12 @@ def run_git(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 # Decide whether a repository path contributes to source identity.
 def source_path_is_relevant(path: Path) -> bool:
+    root_artifact = len(path.parts) == 1 and any(
+        path.match(pattern) for pattern in EXCLUDED_ROOT_SOURCE_GLOBS
+    )
     return (
-        not EXCLUDED_SOURCE_PARTS.intersection(path.parts)
+        not root_artifact
+        and not EXCLUDED_SOURCE_PARTS.intersection(path.parts)
         and path.suffix not in EXCLUDED_SOURCE_SUFFIXES
     )
 

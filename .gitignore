@@ -4,6 +4,11 @@ logs/*
 *.out
 *.err
 
+# Linux core dumps written in the repository root
+/core
+/core.[0-9]*
+/core_nid[0-9]*_[0-9]*
+
 # Python
 __pycache__/
 *.py[cod]
