@@ -10,6 +10,7 @@ import os
 import re
 import socket
 import subprocess
+import statistics
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from script_utils import atomic_json, canonical_sha256, file_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_TEMPERATURE = 0.0
+MIN_PERCENTILE_SAMPLES = 100
 SUMMARY_FIELDS = (
     "name",
     "scenario",
@@ -35,13 +37,22 @@ SUMMARY_FIELDS = (
     "output_len",
     "prompts",
     "concurrency",
+    "repetitions",
+    "total_prompts",
     "request_throughput",
+    "request_throughput_sample_stddev",
     "output_throughput",
+    "output_throughput_sample_stddev",
     "total_token_throughput",
+    "total_token_throughput_sample_stddev",
     "mean_ttft_ms",
+    "mean_ttft_ms_sample_stddev",
     "p99_ttft_ms",
+    "p99_ttft_ms_sample_stddev",
     "mean_tpot_ms",
+    "mean_tpot_ms_sample_stddev",
     "p99_tpot_ms",
+    "p99_tpot_ms_sample_stddev",
 )
 BENCHER_MEASURES = {
     "request_throughput": "request-throughput-req-per-sec",
@@ -76,6 +87,11 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
                 point[field] = int(row[field])
                 if point[field] <= 0:
                     raise ValueError(f"line {line}: {field} must be positive")
+            if point["prompts"] < MIN_PERCENTILE_SAMPLES:
+                raise ValueError(
+                    f"line {line}: prompts must be at least {MIN_PERCENTILE_SAMPLES} "
+                    "for p99 metrics"
+                )
             points.append(point)
     if not points:
         raise ValueError("suite contains no benchmark points")
@@ -224,6 +240,32 @@ def load_benchmark_result(
     return result, total_input_tokens
 
 
+# Aggregate independent suite passes and expose their run-to-run variation.
+def aggregate_measurements(
+    name: str,
+    results: list[dict[str, Any]],
+) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    if len(results) < 2:
+        raise ValueError(f"{name}: at least two measurement repetitions are required")
+    summary: dict[str, float] = {}
+    bencher: dict[str, dict[str, float]] = {}
+    for field, measure in BENCHER_MEASURES.items():
+        try:
+            values = [float(result[field]) for result in results]
+        except KeyError as error:
+            raise RuntimeError(f"{name}: vLLM result is missing {field}") from error
+        mean = statistics.fmean(values)
+        sample_stddev = statistics.stdev(values)
+        summary[field] = mean
+        summary[f"{field}_sample_stddev"] = sample_stddev
+        bencher[measure] = {
+            "value": mean,
+            "lower_value": mean - sample_stddev,
+            "upper_value": mean + sample_stddev,
+        }
+    return summary, bencher
+
+
 # Publish all node-local JIT artifacts after the full warmup and before measurement.
 def publish_jit_cache_after_warmup(
     logdir: Path,
@@ -279,7 +321,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bencher-project", required=True)
     parser.add_argument("--bencher-testbed", required=True)
     parser.add_argument("--warmups", type=int, default=1)
-    return parser.parse_args()
+    parser.add_argument("--repetitions", type=int, default=3)
+    args = parser.parse_args()
+    if args.repetitions < 2:
+        parser.error("--repetitions must be at least 2")
+    return args
 
 
 # Execute the benchmark suite and persist its complete run record.
@@ -338,7 +384,8 @@ def main() -> int:
         ),
         "sha256": file_sha256(suite_path),
         "points": points,
-        "measurement_warmups_per_point": args.warmups,
+        "measurement_repetitions": args.repetitions,
+        "measurement_warmups_per_repetition": args.warmups,
         "pre_measurement_warmup": {
             "full_suite_passes": 1,
             "prompts": "same-as-measurement",
@@ -469,50 +516,94 @@ def main() -> int:
         manifest["jit_cache_publication_command"] = cache_command
         atomic_json(output_dir / "manifest.json", manifest)
 
-        for index, point in enumerate(points, start=1):
+        measurements: dict[str, list[dict[str, Any]]] = {}
+        point_records: dict[str, dict[str, Any]] = {}
+        for point in points:
             effective_input_len = (
                 point["input_len"] + token_alignment["chat_template_token_overhead"]
             )
-            print(
-                f"[measure {index}/{len(points)}] {point['name']}: "
-                f"in={point['input_len']} effective_in={effective_input_len} "
-                f"out={point['output_len']} prompts={point['prompts']} "
-                f"concurrency={point['concurrency']}",
-                flush=True,
-            )
-            raw_file = raw_dir / f"{point['name']}.json"
-            command = build_benchmark_command(
-                args,
-                point,
-                raw_file,
-                label=point["name"],
-                warmups=args.warmups,
-            )
-            subprocess.run(command, check=True)
-            result, total_input_tokens = load_benchmark_result(
-                raw_file, point, effective_input_len
-            )
-            row = {**point, "effective_input_len": effective_input_len}
-            for field in BENCHER_MEASURES:
-                if field not in result:
-                    raise RuntimeError(f"{point['name']}: vLLM result is missing {field}")
-                row[field] = float(result[field])
-            summary.append(row)
-            bencher[point["name"]] = {
-                measure: {"value": row[field]}
-                for field, measure in BENCHER_MEASURES.items()
+            point_raw_dir = raw_dir / point["name"]
+            point_raw_dir.mkdir()
+            measurements[point["name"]] = []
+            point_record = {
+                **point,
+                "effective_input_len": effective_input_len,
+                "repetitions": [],
+                "aggregate": None,
             }
-            manifest["points"].append(
+            point_records[point["name"]] = point_record
+            manifest["points"].append(point_record)
+        atomic_json(output_dir / "manifest.json", manifest)
+
+        for repetition in range(1, args.repetitions + 1):
+            for index, point in enumerate(points, start=1):
+                effective_input_len = point_records[point["name"]][
+                    "effective_input_len"
+                ]
+                print(
+                    f"[measure pass {repetition}/{args.repetitions} "
+                    f"point {index}/{len(points)}] {point['name']}: "
+                    f"in={point['input_len']} effective_in={effective_input_len} "
+                    f"out={point['output_len']} prompts={point['prompts']} "
+                    f"concurrency={point['concurrency']}",
+                    flush=True,
+                )
+                raw_file = (
+                    raw_dir / point["name"] / f"repetition-{repetition}.json"
+                )
+                command = build_benchmark_command(
+                    args,
+                    point,
+                    raw_file,
+                    label=f"{point['name']}-repetition-{repetition}",
+                    warmups=args.warmups,
+                )
+                subprocess.run(command, check=True)
+                result, total_input_tokens = load_benchmark_result(
+                    raw_file, point, effective_input_len
+                )
+                missing_metrics = BENCHER_MEASURES.keys() - result.keys()
+                if missing_metrics:
+                    raise RuntimeError(
+                        f"{point['name']}: vLLM result is missing "
+                        + ", ".join(sorted(missing_metrics))
+                    )
+                measurements[point["name"]].append(result)
+                point_records[point["name"]]["repetitions"].append(
+                    {
+                        "repetition": repetition,
+                        "total_input_tokens": total_input_tokens,
+                        "raw_result": str(raw_file.relative_to(output_dir)),
+                        "raw_sha256": file_sha256(raw_file),
+                        "command": command,
+                    }
+                )
+                atomic_json(output_dir / "manifest.json", manifest)
+
+        for point in points:
+            aggregate, bencher_measures = aggregate_measurements(
+                point["name"], measurements[point["name"]]
+            )
+            summary.append(
                 {
                     **point,
-                    "effective_input_len": effective_input_len,
-                    "total_input_tokens": total_input_tokens,
-                    "raw_result": str(raw_file.relative_to(output_dir)),
-                    "raw_sha256": file_sha256(raw_file),
-                    "command": command,
+                    "effective_input_len": point_records[point["name"]][
+                        "effective_input_len"
+                    ],
+                    "repetitions": args.repetitions,
+                    "total_prompts": point["prompts"] * args.repetitions,
+                    **aggregate,
                 }
             )
-            atomic_json(output_dir / "manifest.json", manifest)
+            bencher[point["name"]] = bencher_measures
+            point_records[point["name"]]["aggregate"] = {
+                field: {
+                    "mean": aggregate[field],
+                    "sample_stddev": aggregate[f"{field}_sample_stddev"],
+                }
+                for field in BENCHER_MEASURES
+            }
+        atomic_json(output_dir / "manifest.json", manifest)
     except BaseException as error:
         if manifest["warmup"]["status"] == "running":
             manifest["warmup"]["status"] = "failed"

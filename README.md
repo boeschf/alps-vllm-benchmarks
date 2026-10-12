@@ -177,8 +177,9 @@ The standard suite contains 11 points:
 - prefill scaling at concurrency 8 with 1K, 4K, and 16K input tokens;
 - decode scaling at concurrency 8 with 128, 512, and 1024 output tokens.
 
-All points use deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
-to zero.
+Every point uses deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
+to zero. Each measured repetition contains at least 128 requests (256 at concurrency 64), so every
+reported p99 is derived from at least 128 request observations.
 
 The benchmark requires the server `/tokenize` endpoint, verifies raw and chat-template tokenization
 before measurement, and fails if measured input-token totals differ from the expected
@@ -189,13 +190,18 @@ Before measurement, the harness runs every suite point once with identical promp
 output lengths, concurrency, seed, and sampling settings. This full unmeasured pass exercises all
 suite shapes; its diagnostic results are retained under `warmup/`.
 
+Measurement then runs three complete suite passes. `summary.tsv` reports the arithmetic mean and
+sample standard deviation of each run-level metric. `bencher.json` publishes that mean with
+`lower_value` and `upper_value` set to one sample standard deviation below and above it. The batch
+script requests four hours to accommodate the warmup and three separate timed passes.
+
 Each completed run is written under `results/<run-id>/`:
 
 ```text
 manifest.json               Run state, provenance, topology, commands, and fingerprints
 summary.tsv                 Human-readable metrics for every point
 bencher.json                Bencher custom-measure payload
-raw/<point>.json            Original vLLM result for each benchmark point
+raw/<point>/repetition-<n>.json  Original vLLM result for each measured repetition
 warmup/<point>.json         Unmeasured full-suite warmup result for each point
 ```
 

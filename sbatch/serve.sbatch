@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=1
 ##SBATCH --cpus-per-task=288
 ##SBATCH --gres=gpu:4
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --exclusive
 #SBATCH --output=logs/serve-%j.out
 #SBATCH --error=logs/serve-%j.err

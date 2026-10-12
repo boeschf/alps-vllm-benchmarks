@@ -11,7 +11,47 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from benchmark import publish_jit_cache_after_warmup
+from benchmark import (
+    BENCHER_MEASURES,
+    MIN_PERCENTILE_SAMPLES,
+    aggregate_measurements,
+    load_suite,
+    publish_jit_cache_after_warmup,
+)
+
+
+class BenchmarkStatisticsTests(unittest.TestCase):
+    def test_standard_suite_has_enough_requests_for_p99(self) -> None:
+        points = load_suite(ROOT / "benchmarks" / "standard.tsv")
+
+        self.assertTrue(points)
+        self.assertTrue(
+            all(point["prompts"] >= MIN_PERCENTILE_SAMPLES for point in points)
+        )
+
+    def test_repetitions_emit_mean_and_sample_standard_deviation(self) -> None:
+        results = [
+            {field: 10.0 for field in BENCHER_MEASURES},
+            {field: 14.0 for field in BENCHER_MEASURES},
+        ]
+
+        summary, bencher = aggregate_measurements("point", results)
+
+        for field, measure in BENCHER_MEASURES.items():
+            self.assertEqual(summary[field], 12.0)
+            self.assertAlmostEqual(
+                summary[f"{field}_sample_stddev"],
+                8.0**0.5,
+            )
+            self.assertEqual(bencher[measure]["value"], 12.0)
+            self.assertAlmostEqual(
+                bencher[measure]["lower_value"],
+                12.0 - 8.0**0.5,
+            )
+            self.assertAlmostEqual(
+                bencher[measure]["upper_value"],
+                12.0 + 8.0**0.5,
+            )
 
 
 class JitCachePublicationTests(unittest.TestCase):
