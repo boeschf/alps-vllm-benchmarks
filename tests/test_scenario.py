@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from scenario import resolve_scenario, select_nodes, validate_server
+from scenario import (
+    build_vllm_instance_configs,
+    materialize_scenario,
+    resolve_scenario,
+    select_nodes,
+    validate_server,
+)
 
 
 class ScenarioAllocationTests(unittest.TestCase):
@@ -208,6 +216,94 @@ class ScenarioAllocationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):
             resolve_scenario("production", "rocm")
 
+
+class VllmInstanceConfigTests(unittest.TestCase):
+    def test_single_mode_config_contains_complete_node_launch(self) -> None:
+        resolved = resolve_scenario("baseline", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved,
+            nodes=4,
+            gpus_per_node=4,
+            head_ip="10.0.0.1",
+            api_port=8000,
+            dp_rpc_port=13345,
+        )
+
+        head = configs["single"][0]
+        worker = configs["single"][3]
+        self.assertEqual(head["tensor-parallel-size"], 2)
+        self.assertEqual(head["data-parallel-size"], 8)
+        self.assertEqual(head["data-parallel-size-local"], 2)
+        self.assertEqual(head["data-parallel-address"], "10.0.0.1")
+        self.assertEqual(head["data-parallel-rpc-port"], 13345)
+        self.assertEqual(head["host"], "0.0.0.0")
+        self.assertEqual(head["port"], 8000)
+        self.assertNotIn("headless", head)
+        self.assertTrue(worker["headless"])
+        self.assertEqual(worker["data-parallel-start-rank"], 6)
+        self.assertNotIn("host", worker)
+
+    def test_disaggregated_configs_are_complete_per_role(self) -> None:
+        resolved = resolve_scenario("disaggregated-pd", "cuda")
+        configs = build_vllm_instance_configs(
+            resolved,
+            nodes=8,
+            gpus_per_node=4,
+            head_ip="10.0.0.1",
+            api_port=8000,
+            dp_rpc_port=13345,
+        )
+
+        prefill_head = configs["prefill"][0]
+        decode_worker = configs["decode"][3]
+        self.assertEqual(prefill_head["data-parallel-size"], 8)
+        self.assertEqual(prefill_head["data-parallel-rpc-port"], 13345)
+        self.assertEqual(prefill_head["port"], 8100)
+        self.assertEqual(
+            prefill_head["kv-transfer-config"]["kv_role"],
+            "kv_producer",
+        )
+        self.assertEqual(decode_worker["data-parallel-size"], 8)
+        self.assertEqual(decode_worker["data-parallel-rpc-port"], 13346)
+        self.assertEqual(decode_worker["data-parallel-start-rank"], 6)
+        self.assertTrue(decode_worker["headless"])
+        self.assertEqual(
+            decode_worker["kv-transfer-config"]["kv_role"],
+            "kv_consumer",
+        )
+
+
+    def test_materialization_writes_complete_config_for_every_node(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            scenario_path = materialize_scenario(
+                resolve_scenario("baseline", "cuda"),
+                platform="cuda",
+                nodes=4,
+                gpus_per_node=4,
+                model="/models/GLM-5.3",
+                load_format="runai_streamer",
+                head_ip="10.0.0.1",
+                api_port=8000,
+                dp_rpc_port=13345,
+                output_dir=output,
+            )
+            scenario = json.loads(scenario_path.read_text())
+
+            records = scenario["vllm_configs"]["single"]
+            self.assertEqual(set(records), {"0", "1", "2", "3"})
+            self.assertEqual(
+                {record["path"] for record in records.values()},
+                {
+                    "vllm-single-node0.yaml",
+                    "vllm-single-node1.yaml",
+                    "vllm-single-node2.yaml",
+                    "vllm-single-node3.yaml",
+                },
+            )
+            self.assertTrue(
+                all((output / record["path"]).is_file() for record in records.values())
+            )
 
 if __name__ == "__main__":
     unittest.main()

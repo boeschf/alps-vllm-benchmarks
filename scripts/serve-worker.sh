@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
-# Per-node worker inside the container. The scenario resolver decides what this node
-# runs: single-mode serving (SCENARIO_VLLM_CONFIG), disaggregated prefill or decode
-# (PREFILL_SCENARIO_VLLM_CONFIG / DECODE_SCENARIO_VLLM_CONFIG with DEPLOYMENT_ROLE),
-# or a mooncake master (MOONCAKE_STORE_ENABLED=1 on the head node). This script only
-# launches what the resolver produced.
+# Per-node worker inside the container. The scenario resolver writes one complete
+# vLLM YAML for each role-local node. This script selects that file, captures the
+# runtime fingerprint, and launches it without appending vLLM configuration flags.
 set -euo pipefail
 
 : "${MODEL:?MODEL must be an absolute checkpoint path}"
-: "${HEAD_IP:?HEAD_IP is required}"
+: "${SCENARIO_VLLM_CONFIG_DIR:?SCENARIO_VLLM_CONFIG_DIR is required}"
 : "${LOGDIR:?LOGDIR is required}"
 : "${SCENARIO_ENV:?SCENARIO_ENV must be the generated scenario.env}"
 : "${ROOT:?ROOT must be the repository root}"
@@ -41,14 +39,10 @@ TP_SIZE="${TP_SIZE:-2}"
 # prefill and decode steps each get contiguous data-parallel ranks from zero.
 NODE_RANK="${SLURM_PROCID:?SLURM_PROCID is required}"
 DP_LOCAL=$((GPUS_PER_NODE / TP_SIZE))
-API_PORT="${API_PORT:-8000}"
-DP_RPC_PORT="${DP_RPC_PORT:-13345}"
 
 role="${DEPLOYMENT_ROLE:-single}"
 if [[ "${SERVING_MODE}" == "single" ]]; then
   [[ "${role}" == "single" ]] || { echo "SERVING_MODE=single but DEPLOYMENT_ROLE=${role}" >&2; exit 2; }
-  : "${SCENARIO_VLLM_CONFIG:?SCENARIO_VLLM_CONFIG is required for single-mode serving}"
-  CONFIG="${SCENARIO_VLLM_CONFIG}"
   DP_TOTAL=$((SLURM_JOB_NUM_NODES * DP_LOCAL))
 else
   if [[ "${role}" != "prefill" && "${role}" != "decode" ]]; then
@@ -56,20 +50,13 @@ else
     exit 2
   fi
   if [[ "${role}" == "prefill" ]]; then
-    : "${PREFILL_SCENARIO_VLLM_CONFIG:?PREFILL_SCENARIO_VLLM_CONFIG is required}"
-    CONFIG="${PREFILL_SCENARIO_VLLM_CONFIG}"
-    API_PORT="${PREFILL_API_PORT:?PREFILL_API_PORT is required}"
-    DP_RPC_PORT="${PREFILL_RPC_PORT:?PREFILL_RPC_PORT is required}"
     DP_TOTAL=$((PREFILL_NODES * DP_LOCAL))
   else
-    : "${DECODE_SCENARIO_VLLM_CONFIG:?DECODE_SCENARIO_VLLM_CONFIG is required}"
-    CONFIG="${DECODE_SCENARIO_VLLM_CONFIG}"
-    API_PORT="${DECODE_API_PORT:?DECODE_API_PORT is required}"
-    DP_RPC_PORT="${DECODE_RPC_PORT:?DECODE_RPC_PORT is required}"
     DP_TOTAL=$((DECODE_NODES * DP_LOCAL))
   fi
 fi
-START_RANK=$((NODE_RANK * DP_LOCAL))
+CONFIG="${SCENARIO_VLLM_CONFIG_DIR}/vllm-${role}-node${NODE_RANK}.yaml"
+[[ -f "${CONFIG}" ]] || { echo "vLLM config is missing: ${CONFIG}" >&2; exit 2; }
 CACHE_STATUS="${LOGDIR}/jit-cache-${role}-node${NODE_RANK}.json"
 python3 "${ROOT}/scripts/jit-cache.py" hydrate --status "${CACHE_STATUS}"
 export JIT_CACHE_STATUS_FILE="${CACHE_STATUS}"
@@ -91,31 +78,9 @@ printf '[node %s] host=%s platform=%s role=%s scenario=%s TP=%s DP=%s local-DP=%
   "${TP_SIZE}" "${DP_TOTAL}" "${DP_LOCAL}" "$((DP_TOTAL * TP_SIZE))"
 CONFIG_ARGS=(--config "${CONFIG}")
 python -c 'import torch, vllm; print(f"torch={torch.__version__} cuda={torch.version.cuda} hip={torch.version.hip} vllm={vllm.__version__}")'
+SERVER_COMMAND=(vllm serve "${CONFIG_ARGS[@]}")
 
-COMMON=(
-  "${CONFIG_ARGS[@]}"
-  --tensor-parallel-size "${TP_SIZE}"
-  --data-parallel-size "${DP_TOTAL}"
-  --data-parallel-size-local "${DP_LOCAL}"
-  --data-parallel-address "${HEAD_IP}"
-  --data-parallel-rpc-port "${DP_RPC_PORT}"
-)
-if (( NODE_RANK == 0 )); then
-  SERVER_COMMAND=(
-    vllm serve "${COMMON[@]}"
-    --host 0.0.0.0
-    --port "${API_PORT}"
-  )
-else
-  SERVER_COMMAND=(
-    vllm serve "${COMMON[@]}"
-    --headless
-    --data-parallel-start-rank "${START_RANK}"
-  )
-fi
-
-# Record the complete command that this node will execute, including all
-# topology and head/headless arguments.
+# Record the config-only command executed by this node.
 python3 "${ROOT}/scripts/runtime-fingerprint.py" \
   --output "${LOGDIR}/runtime-${role}-node${NODE_RANK}.json" \
   --command-output "${LOGDIR}/server-command-${role}-node${NODE_RANK}.json" \

@@ -221,6 +221,74 @@ def validate_server(resolved: dict[str, Any], environment: dict[str, str]) -> No
             )
 
 
+# Build the complete vLLM configuration executed by every role-local node.
+def build_vllm_instance_configs(
+    resolved: dict[str, Any],
+    *,
+    nodes: int,
+    gpus_per_node: int,
+    head_ip: str,
+    api_port: int,
+    dp_rpc_port: int,
+) -> dict[str, dict[int, dict[str, Any]]]:
+    tp_size = int(resolved["topology"]["tensor_parallel_size"])
+    if gpus_per_node % tp_size:
+        raise ValueError(
+            f"gpus_per_node={gpus_per_node} is not divisible by tensor_parallel_size={tp_size}"
+        )
+    dp_local = gpus_per_node // tp_size
+    mode = resolved.get("mode", "single")
+    if mode == "single":
+        roles = {
+            "single": {
+                "nodes": nodes,
+                "api_port": api_port,
+                "rpc_port": dp_rpc_port,
+                "server": resolved["server"],
+            }
+        }
+    else:
+        deployments = resolved["deployments"]
+        roles = {
+            role: {
+                "nodes": int(deployments[role]["nodes"]),
+                "api_port": int(deployments[role]["api_port"]),
+                "rpc_port": int(deployments[role]["rpc_port"]),
+                "server": deep_merge(
+                    resolved["server"],
+                    deployments[role]["server"],
+                ),
+            }
+            for role in ("prefill", "decode")
+        }
+
+    configs: dict[str, dict[int, dict[str, Any]]] = {}
+    for role, deployment in roles.items():
+        role_nodes = int(deployment["nodes"])
+        dp_total = role_nodes * dp_local
+        common = deep_merge(
+            deployment["server"],
+            {
+                "tensor-parallel-size": tp_size,
+                "data-parallel-size": dp_total,
+                "data-parallel-size-local": dp_local,
+                "data-parallel-address": head_ip,
+                "data-parallel-rpc-port": int(deployment["rpc_port"]),
+            },
+        )
+        configs[role] = {}
+        for node_rank in range(role_nodes):
+            config = deepcopy(common)
+            if node_rank == 0:
+                config["host"] = "0.0.0.0"
+                config["port"] = int(deployment["api_port"])
+            else:
+                config["headless"] = True
+                config["data-parallel-start-rank"] = node_rank * dp_local
+            configs[role][node_rank] = config
+    return configs
+
+
 # Validate an allocation and write its runtime scenario files.
 def materialize_scenario(
     resolved: dict[str, Any],
@@ -231,6 +299,8 @@ def materialize_scenario(
     model: str,
     load_format: str,
     head_ip: str,
+    api_port: int,
+    dp_rpc_port: int,
     output_dir: Path,
 ) -> Path:
     resolved = deepcopy(resolved)
@@ -264,18 +334,33 @@ def materialize_scenario(
     backend = str(server["all2all-backend"])
     mode = resolved.get("mode", "single")
 
-    config_paths: dict[str, Path] = {}
-    if mode == "single":
-        config_paths["single"] = output_dir / "vllm-config.yaml"
-        write_yaml(config_paths["single"], server)
-    else:
+    if mode == "disaggregated":
         deployments = resolved["deployments"]
         for role in ("prefill", "decode"):
-            role_server = deep_merge(server, deployments[role]["server"])
-            role_server["load-format"] = load_format
-            deployments[role]["resolved_server"] = role_server
-            config_paths[role] = output_dir / f"vllm-{role}-config.yaml"
-            write_yaml(config_paths[role], role_server)
+            deployments[role]["resolved_server"] = deep_merge(
+                server,
+                deployments[role]["server"],
+            )
+
+    instance_configs = build_vllm_instance_configs(
+        resolved,
+        nodes=selected_nodes,
+        gpus_per_node=gpus_per_node,
+        head_ip=head_ip,
+        api_port=api_port,
+        dp_rpc_port=dp_rpc_port,
+    )
+    config_records: dict[str, dict[str, dict[str, Any]]] = {}
+    for role, node_configs in instance_configs.items():
+        config_records[role] = {}
+        for node_rank, config in node_configs.items():
+            config_path = output_dir / f"vllm-{role}-node{node_rank}.yaml"
+            write_yaml(config_path, config)
+            config_records[role][str(node_rank)] = {
+                "path": config_path.name,
+                "sha256": file_sha256(config_path),
+            }
+    resolved["vllm_configs"] = config_records
 
     services = resolved.get("services", {})
     mooncake = services.get("mooncake_store", {})
@@ -305,6 +390,9 @@ def materialize_scenario(
         "SERVING_MODE": str(mode),
         "SCENARIO_RESOLVED": str(resolved_path),
         "SCENARIO_ENV_NAMES": ",".join(sorted(environment)),
+        "SCENARIO_VLLM_CONFIG_DIR": str(output_dir),
+        "API_PORT": str(api_port),
+        "DP_RPC_PORT": str(dp_rpc_port),
         "TP_SIZE": str(tp_size),
         "ALL2ALL": backend,
         "MAX_MODEL_LEN": str(server["max-model-len"]),
@@ -315,14 +403,10 @@ def materialize_scenario(
         "MOONCAKE_STORE_ENABLED": "1" if mooncake.get("enabled") else "0",
         "MOONCAKE_MASTER_PORT": str(mooncake.get("master_port", "")),
     }
-    if mode == "single":
-        exports["SCENARIO_VLLM_CONFIG"] = str(config_paths["single"])
-    else:
+    if mode == "disaggregated":
         deployments = resolved["deployments"]
         exports.update(
             {
-                "PREFILL_SCENARIO_VLLM_CONFIG": str(config_paths["prefill"]),
-                "DECODE_SCENARIO_VLLM_CONFIG": str(config_paths["decode"]),
                 "PREFILL_NODES": str(deployments["prefill"]["nodes"]),
                 "DECODE_NODES": str(deployments["decode"]["nodes"]),
                 "PREFILL_API_PORT": str(deployments["prefill"]["api_port"]),
@@ -350,6 +434,8 @@ def resolve(args: argparse.Namespace) -> None:
         model=args.model,
         load_format=args.load_format,
         head_ip=args.head_ip,
+        api_port=args.api_port,
+        dp_rpc_port=args.dp_rpc_port,
         output_dir=args.output_dir,
     )
     print(resolved_path)
@@ -365,6 +451,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True)
     parser.add_argument("--load-format", required=True)
     parser.add_argument("--head-ip", required=True)
+    parser.add_argument("--api-port", type=int, default=8000)
+    parser.add_argument("--dp-rpc-port", type=int, default=13345)
     parser.add_argument("--output-dir", required=True, type=Path)
     return parser.parse_args()
 

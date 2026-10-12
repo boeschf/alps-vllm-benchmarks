@@ -177,6 +177,12 @@ logs/serve-<jobid>.err       Slurm standard error
 logs/run-<jobid>/            Scenario, per-node runtime, server, smoke, and cache records
 ```
 
+Scenario materialization writes one complete vLLM YAML per role-local node under
+`logs/run-<jobid>/scenario/`, for example `vllm-single-node0.yaml` or
+`vllm-decode-node3.yaml`. Each file includes the model, topology, coordinator, rank, and API
+settings used by that process. Workers launch only `vllm serve --config <node-yaml>`; no vLLM
+settings are appended by the Slurm launcher.
+
 ## Run the standard benchmark
 
 Pass the suite to the submission wrapper. The job exits after readiness, smoke completion, cache
