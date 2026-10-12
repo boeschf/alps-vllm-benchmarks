@@ -17,9 +17,11 @@ present in the images but are enabled only by explicit scenarios.
 | GH200 | [`config/platforms/cuda.env`](config/platforms/cuda.env) | Run:ai Model Streamer |
 | MI300A | [`config/platforms/rocm.env`](config/platforms/rocm.env) | Standard vLLM loader |
 
-`IMAGE_REF` in each platform profile is the sole current-image pin. Each EDF expands that value
-and otherwise contains only runtime settings. Both current pins are content-addressed development
-images from the open pull request, so changing an image remains an explicit repository change.
+`IMAGE_REF` in each platform profile selects the current image tag. At job startup the launcher
+resolves that tag through the registry and records its immutable `IMAGE_DIGEST`; failure to resolve
+the digest fails the job before serving. Each EDF expands `IMAGE_REF` and otherwise contains only
+runtime settings. Changing an image tag remains an explicit repository change, while the resolved
+digest detects registry-side tag movement.
 
 ## Repository layout
 
@@ -284,19 +286,28 @@ caches without changing inference correctness.
 ## Benchmark provenance and Bencher
 
 `manifest.json` schema 2 records the repository state, the exact Slurm spool script, model identity,
-image and EDF, resolved scenario, topology, per-node runtime identities, complete executed server
-and benchmark commands, cache status, and result hashes.
+image tag and resolved OCI manifest digest, EDF, resolved scenario, topology, per-node runtime
+identities, complete executed server and benchmark commands, cache status, and result hashes.
+
+Benchmark initialization also creates `reproduction/` in the result directory. Its `vllm/`
+subdirectory contains byte-for-byte copies of every role/node YAML, `environment.json` contains
+the allowlisted environment captured for each process, and `bundle.json` records their checksums.
+The allowlist includes every EDF runtime setting, the image tag and digest, and scenario-declared
+variables; unrelated process environment is excluded. These artifacts are created before warmup
+and remain available when a later benchmark phase fails.
 
 Two fingerprints separate experiment identity from record integrity:
 
 - `experiment_fingerprint` covers relevant tracked and untracked source files, the executed Slurm
   batch-script checksum, model metadata and shard inventory, image, EDF, scenario, topology, stable
-  runtime identity, and suite definition;
+  runtime identity, the reproduction bundle's normalized identity, and suite definition;
 - `record_fingerprint` additionally covers the completed output artifacts, including the archived
-  batch script.
+  batch script and exact reproduction bundle.
 
-Hostnames, timestamps, and concrete node names are excluded from the fingerprints so equivalent
-runs on the same allocation shape retain the same experiment identity.
+Hostnames, timestamps, concrete node names, coordinator addresses, and run-local cache paths are
+excluded from experiment identity so equivalent runs on the same allocation shape retain the same
+fingerprint. Their exact measured values remain checksummed in the reproduction bundle and are
+therefore covered by record integrity.
 
 Install the pinned Bencher CLI into `tools/bin/<arch>/`:
 

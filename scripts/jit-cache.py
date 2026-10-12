@@ -87,6 +87,7 @@ def compatibility_identity() -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "platform": os.environ["PLATFORM"],
         "image_ref": os.environ["IMAGE_REF"],
+        "image_digest": os.environ["IMAGE_DIGEST"],
         "python_abi": sys.implementation.cache_tag,
         "python_version": platform.python_version(),
         "packages": distribution_versions(PACKAGE_NAMES),
@@ -299,7 +300,7 @@ def current_generation(namespace: Path) -> str | None:
     return pointer.read_text().strip() if pointer.is_file() else None
 
 
-# A seed may differ only by an explicitly allowed image reference.
+# A seed may differ only by an explicitly allowed image reference and its digest.
 def image_seed_compatible(identity: dict[str, Any], candidate: dict[str, Any]) -> bool:
     allowed_images = {
         value.strip()
@@ -307,9 +308,15 @@ def image_seed_compatible(identity: dict[str, Any], candidate: dict[str, Any]) -
         if value.strip()
     }
     candidate_image = candidate.get("image_ref")
+    candidate_digest = candidate.get("image_digest")
     return (
         candidate_image in allowed_images
-        and candidate == {**identity, "image_ref": candidate_image}
+        and candidate
+        == {
+            **identity,
+            "image_ref": candidate_image,
+            "image_digest": candidate_digest,
+        }
     )
 
 

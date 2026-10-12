@@ -12,7 +12,7 @@ from pathlib import Path
 
 from typing import Any
 
-from script_utils import atomic_json, atomic_text, file_sha256
+from script_utils import atomic_json, atomic_text, canonical_sha256, file_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = ROOT / "config" / "scenarios"
@@ -356,9 +356,12 @@ def materialize_scenario(
         for node_rank, config in node_configs.items():
             config_path = output_dir / f"vllm-{role}-node{node_rank}.yaml"
             write_yaml(config_path, config)
+            identity_config = deepcopy(config)
+            identity_config["data-parallel-address"] = "<runtime-address>"
             config_records[role][str(node_rank)] = {
                 "path": config_path.name,
                 "sha256": file_sha256(config_path),
+                "identity_sha256": canonical_sha256(identity_config),
             }
     resolved["vllm_configs"] = config_records
 

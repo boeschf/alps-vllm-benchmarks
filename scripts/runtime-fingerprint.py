@@ -26,6 +26,42 @@ RUNTIME_PACKAGES = (
     "runai-model-streamer",
 )
 
+RUNTIME_ENVIRONMENT_NAMES = frozenset(
+    {
+        "ALL2ALL",
+        "FLASHINFER_WORKSPACE_BASE",
+        "IMAGE_DIGEST",
+        "IMAGE_REF",
+        "JIT_CACHE_MODE",
+        "JIT_CACHE_ROOT",
+        "LOAD_FORMAT",
+        "MAX_JOBS",
+        "OMP_NUM_THREADS",
+        "PLATFORM",
+        "PMIX_MCA_psec",
+        "SCENARIO_ID",
+        "TORCHINDUCTOR_CACHE_DIR",
+        "TORCH_EXTENSIONS_DIR",
+        "TORCH_HOME",
+        "TP_SIZE",
+        "TRITON_CACHE_DIR",
+        "TRTLLM_DG_CACHE_DIR",
+        "VLLM_CACHE_ROOT",
+        "XDG_CACHE_HOME",
+    }
+)
+
+
+# Capture only scenario-declared and explicitly reviewed runtime variables.
+def captured_environment() -> dict[str, str]:
+    scenario_names = filter(None, os.getenv("SCENARIO_ENV_NAMES", "").split(","))
+    return {
+        name: os.environ[name]
+        for name in sorted(RUNTIME_ENVIRONMENT_NAMES.union(scenario_names))
+        if name in os.environ
+    }
+
+
 
 # Describe every accelerator visible to the serving process.
 def accelerator_identity() -> dict[str, Any]:
@@ -66,22 +102,7 @@ def main() -> None:
     if not command:
         raise ValueError("server command is empty")
 
-    scenario_names = filter(None, os.getenv("SCENARIO_ENV_NAMES", "").split(","))
-    fixed_names = {
-        "ALL2ALL",
-        "IMAGE_REF",
-        "LOAD_FORMAT",
-        "PLATFORM",
-        "SCENARIO_ID",
-        "JIT_CACHE_MODE",
-        "JIT_CACHE_ROOT",
-        "TP_SIZE",
-    }
-    environment = {
-        name: os.environ[name]
-        for name in sorted(fixed_names.union(scenario_names))
-        if name in os.environ
-    }
+    environment = captured_environment()
     jit_cache = None
     status_file = os.getenv("JIT_CACHE_STATUS_FILE")
     if status_file:

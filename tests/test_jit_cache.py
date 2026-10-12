@@ -60,13 +60,18 @@ class CacheIdentityTests(unittest.TestCase):
             "schema_version": 2,
             "platform": "cuda",
             "image_ref": "new",
+            "image_digest": "sha256:" + "1" * 64,
             "python_abi": "cpython-312",
             "packages": {"torch": "test"},
             "accelerator": {"architecture": "sm90"},
             "cuda": "13.3",
             "hip": None,
         }
-        candidate = {**current, "image_ref": "old"}
+        candidate = {
+            **current,
+            "image_ref": "old",
+            "image_digest": "sha256:" + "2" * 64,
+        }
         with patch.dict(os.environ, {"JIT_CACHE_SEED_IMAGE_REFS": "old"}):
             self.assertTrue(jit_cache.image_seed_compatible(current, candidate))
             incompatible = {
@@ -197,6 +202,7 @@ class LifecycleTests(unittest.TestCase):
                 "JIT_CACHE_KEEP_GENERATIONS": "3",
                 "PLATFORM": "cuda",
                 "IMAGE_REF": "example/image@sha256:test",
+                "IMAGE_DIGEST": "sha256:" + "1" * 64,
             }
             environment.update(
                 {
@@ -208,6 +214,7 @@ class LifecycleTests(unittest.TestCase):
                 "schema_version": jit_cache.SCHEMA_VERSION,
                 "platform": "cuda",
                 "image_ref": environment["IMAGE_REF"],
+                "image_digest": environment["IMAGE_DIGEST"],
                 "python_abi": "cpython-test",
                 "python_version": "test",
                 "packages": {},
@@ -276,6 +283,7 @@ class PublicationTests(unittest.TestCase):
             "schema_version": jit_cache.SCHEMA_VERSION,
             "platform": "cuda",
             "image_ref": "example/image@sha256:test",
+            "image_digest": "sha256:" + "1" * 64,
             "python_abi": "cpython-test",
             "python_version": "test",
             "packages": {},

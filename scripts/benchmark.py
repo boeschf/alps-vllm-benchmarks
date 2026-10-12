@@ -8,6 +8,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import statistics
@@ -391,6 +392,123 @@ def publish_jit_cache_after_warmup(
     return {**publication, "mode": mode, "phase": phase}, command
 
 
+# Archive the exact vLLM configs and allowlisted process environments used by the run.
+def archive_reproduction_bundle(
+    scenario_path: Path,
+    output_dir: Path,
+    runtime_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    scenario = json.loads(scenario_path.read_text())
+    configured = scenario.get("vllm_configs")
+    if not isinstance(configured, dict) or not configured:
+        raise ValueError("resolved scenario has no vLLM configuration records")
+
+    reproduction_dir = output_dir / "reproduction"
+    vllm_dir = reproduction_dir / "vllm"
+    reproduction_dir.mkdir()
+    vllm_dir.mkdir()
+    archived_configs: list[dict[str, Any]] = []
+    identity_configs: list[dict[str, Any]] = []
+    for role in sorted(configured):
+        records = configured[role]
+        for node_rank in sorted(records, key=int):
+            record = records[node_rank]
+            relative = Path(record["path"])
+            if relative.name != relative.as_posix():
+                raise ValueError(f"invalid vLLM configuration path: {relative}")
+            source = scenario_path.parent / relative
+            if not source.is_file():
+                raise FileNotFoundError(f"vLLM configuration is missing: {source}")
+            source_sha256 = file_sha256(source)
+            if source_sha256 != record.get("sha256"):
+                raise ValueError(f"vLLM configuration checksum mismatch: {source}")
+            destination = vllm_dir / relative.name
+            shutil.copyfile(source, destination)
+            copied_sha256 = file_sha256(destination)
+            if copied_sha256 != source_sha256:
+                raise RuntimeError(f"archived vLLM configuration changed: {destination}")
+            archived_configs.append(
+                {
+                    "role": role,
+                    "node_rank": int(node_rank),
+                    "path": destination.relative_to(reproduction_dir).as_posix(),
+                    "sha256": copied_sha256,
+                    "identity_sha256": record["identity_sha256"],
+                }
+            )
+            identity_configs.append(
+                {
+                    "role": role,
+                    "node_rank": int(node_rank),
+                    "sha256": record["identity_sha256"],
+                }
+            )
+
+    environments = [
+        {
+            "deployment_role": record["deployment_role"],
+            "node_rank": record["node_rank"],
+            "environment": record["environment"],
+        }
+        for record in sorted(
+            runtime_records,
+            key=lambda item: (item["deployment_role"], item["node_rank"]),
+        )
+    ]
+    environment_path = reproduction_dir / "environment.json"
+    atomic_json(
+        environment_path,
+        {
+            "schema_version": 1,
+            "records": environments,
+        },
+    )
+
+    # Runtime-local paths are archived exactly but excluded from experiment identity.
+    identity_environments = []
+    for record in environments:
+        environment = dict(record["environment"])
+        for name in ("JIT_CACHE_ROOT", "MOONCAKE_CONFIG_PATH"):
+            if name in environment:
+                environment[name] = f"<{name.lower()}>"
+        identity_environments.append(
+            {
+                "deployment_role": record["deployment_role"],
+                "node_rank": record["node_rank"],
+                "environment": environment,
+            }
+        )
+    identity_sha256 = canonical_sha256(
+        {
+            "schema_version": 1,
+            "vllm_configs": identity_configs,
+            "environment": identity_environments,
+        }
+    )
+    bundle_path = reproduction_dir / "bundle.json"
+    atomic_json(
+        bundle_path,
+        {
+            "schema_version": 1,
+            "scenario_id": scenario["id"],
+            "mode": scenario.get("mode", "single"),
+            "identity_sha256": identity_sha256,
+            "vllm_configs": archived_configs,
+            "environment": {
+                "path": environment_path.relative_to(reproduction_dir).as_posix(),
+                "sha256": file_sha256(environment_path),
+            },
+        },
+    )
+    return {
+        "schema_version": 1,
+        "path": bundle_path.relative_to(output_dir).as_posix(),
+        "sha256": file_sha256(bundle_path),
+        "identity_sha256": identity_sha256,
+        "vllm_config_count": len(archived_configs),
+    }
+
+
 # Parse benchmark execution and provenance options.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -402,6 +520,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id")
     parser.add_argument("--platform", required=True, choices=("cuda", "rocm"))
     parser.add_argument("--image-ref", required=True)
+    parser.add_argument("--image-digest", required=True)
     parser.add_argument("--scenario-config", type=Path, required=True)
     parser.add_argument("--edf", type=Path, required=True)
     parser.add_argument("--logdir", type=Path, required=True)
@@ -466,6 +585,11 @@ def main() -> int:
     repository = repository_identity(ROOT)
     model = model_identity(Path(args.model), os.getenv("MODEL_REPO", "zai-org/GLM-5.3"))
     runtime_records, server_commands = load_runtime_records(logdir)
+    reproduction = archive_reproduction_bundle(
+        scenario_path,
+        output_dir,
+        runtime_records,
+    )
     cache_mode = os.getenv("JIT_CACHE_MODE", "off")
     cache_publication = {
         "status": "pending" if cache_mode == "readwrite" else "not-published",
@@ -502,11 +626,16 @@ def main() -> int:
         },
         "model": model_for_fingerprint,
         "image_ref": args.image_ref,
+        "image_digest": args.image_digest,
         "platform": args.platform,
         "edf_sha256": file_sha256(edf_path),
         "scenario": scenario,
         "topology": {key: value for key, value in topology.items() if key != "node_list"},
         "runtime": stable_runtime_identity(runtime_records),
+        "reproduction": {
+            "schema_version": reproduction["schema_version"],
+            "identity_sha256": reproduction["identity_sha256"],
+        },
         "suite": suite_identity,
     }
     experiment_fingerprint = canonical_sha256(experiment_identity)
@@ -540,6 +669,7 @@ def main() -> int:
         "served_model_name": args.served_model_name,
         "platform": args.platform,
         "image_ref": args.image_ref,
+        "image_digest": args.image_digest,
         "image_source": "https://github.com/eth-cscs/alps-extended-images/pull/63",
         "edf": {"path": str(edf_path), "sha256": file_sha256(edf_path)},
         "scenario": scenario,
@@ -554,6 +684,7 @@ def main() -> int:
         "topology": topology,
         "runtime": runtime_records,
         "server_commands": server_commands,
+        "reproduction": reproduction,
         "publication": publication,
         "jit_cache_publication": cache_publication,
         "jit_cache_publication_command": None,

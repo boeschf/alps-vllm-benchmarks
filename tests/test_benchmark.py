@@ -16,11 +16,14 @@ from benchmark import (
     BENCHER_MEASURES,
     MIN_PERCENTILE_SAMPLES,
     aggregate_measurements,
+    archive_reproduction_bundle,
     load_suite,
     make_warmup_point,
     publish_jit_cache_after_warmup,
     run_with_heartbeat,
 )
+from provenance import artifact_inventory
+from script_utils import canonical_sha256, file_sha256
 
 
 class BenchmarkStatisticsTests(unittest.TestCase):
@@ -83,6 +86,143 @@ class BenchmarkStatisticsTests(unittest.TestCase):
                 bencher[measure]["upper_value"],
                 12.0 + 8.0**0.5,
             )
+
+
+
+class ReproductionBundleTests(unittest.TestCase):
+    def test_archives_exact_configs_and_allowlisted_environment(self) -> None:
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario_dir = root / "scenario"
+            scenario_dir.mkdir()
+            output_dir = root / "result"
+            output_dir.mkdir()
+            config_path = scenario_dir / "vllm-single-node0.yaml"
+            config_path.write_text(
+                "model: /models/GLM-5.3\n"
+                "data-parallel-address: 10.0.0.1\n"
+                "host: 0.0.0.0\n"
+            )
+            identity_sha256 = canonical_sha256(
+                {
+                    "model": "/models/GLM-5.3",
+                    "data-parallel-address": "<runtime-address>",
+                    "host": "0.0.0.0",
+                }
+            )
+            scenario_path = scenario_dir / "scenario.json"
+            scenario_path.write_text(
+                json.dumps(
+                    {
+                        "id": "baseline",
+                        "mode": "single",
+                        "vllm_configs": {
+                            "single": {
+                                "0": {
+                                    "path": config_path.name,
+                                    "sha256": file_sha256(config_path),
+                                    "identity_sha256": identity_sha256,
+                                }
+                            }
+                        },
+                    }
+                )
+            )
+            runtime_records = [
+                {
+                    "deployment_role": "single",
+                    "node_rank": 0,
+                    "environment": {
+                        "IMAGE_REF": "example/image@sha256:test",
+                        "JIT_CACHE_ROOT": "/machine-specific/cache",
+                    },
+                }
+            ]
+
+            reproduction = archive_reproduction_bundle(
+                scenario_path,
+                output_dir,
+                runtime_records,
+            )
+
+            archived = output_dir / "reproduction" / "vllm" / config_path.name
+            self.assertEqual(archived.read_bytes(), config_path.read_bytes())
+            self.assertEqual(reproduction["vllm_config_count"], 1)
+            self.assertEqual(
+                reproduction["sha256"],
+                file_sha256(output_dir / reproduction["path"]),
+            )
+            environment = json.loads(
+                (output_dir / "reproduction" / "environment.json").read_text()
+            )
+            self.assertEqual(environment["records"], runtime_records)
+            bundle = json.loads(
+                (output_dir / "reproduction" / "bundle.json").read_text()
+            )
+            self.assertEqual(bundle["identity_sha256"], reproduction["identity_sha256"])
+            self.assertEqual(
+                bundle["vllm_configs"][0]["identity_sha256"],
+                identity_sha256,
+            )
+
+
+            artifact_paths = {
+                artifact["path"] for artifact in artifact_inventory(output_dir)
+            }
+            self.assertEqual(
+                artifact_paths,
+                {
+                    "reproduction/bundle.json",
+                    "reproduction/environment.json",
+                    "reproduction/vllm/vllm-single-node0.yaml",
+                },
+            )
+
+            second_output = root / "second-result"
+            second_output.mkdir()
+            second_runtime = json.loads(json.dumps(runtime_records))
+            second_runtime[0]["environment"]["JIT_CACHE_ROOT"] = "/another/cache"
+            second_reproduction = archive_reproduction_bundle(
+                scenario_path,
+                second_output,
+                second_runtime,
+            )
+            self.assertEqual(
+                second_reproduction["identity_sha256"],
+                reproduction["identity_sha256"],
+            )
+            self.assertNotEqual(second_reproduction["sha256"], reproduction["sha256"])
+
+    def test_rejects_changed_source_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scenario_dir = root / "scenario"
+            scenario_dir.mkdir()
+            output_dir = root / "result"
+            output_dir.mkdir()
+            config_path = scenario_dir / "vllm-single-node0.yaml"
+            config_path.write_text("model: /models/GLM-5.3\n")
+            scenario_path = scenario_dir / "scenario.json"
+            scenario_path.write_text(
+                json.dumps(
+                    {
+                        "id": "baseline",
+                        "vllm_configs": {
+                            "single": {
+                                "0": {
+                                    "path": config_path.name,
+                                    "sha256": "0" * 64,
+                                    "identity_sha256": "1" * 64,
+                                }
+                            }
+                        },
+                    }
+                )
+            )
+
+            with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+                archive_reproduction_bundle(scenario_path, output_dir, [])
 
 
 class BenchmarkHeartbeatTests(unittest.TestCase):
