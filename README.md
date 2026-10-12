@@ -190,9 +190,12 @@ before measurement, and fails if measured input-token totals differ from the exp
 post-template lengths. `summary.tsv` records both requested `input_len` and
 `effective_input_len`.
 
-Before measurement, the harness runs every suite point once with identical prompt count, input and
-output lengths, concurrency, seed, and sampling settings. This full unmeasured pass exercises all
-suite shapes; its diagnostic results are retained under `warmup/`.
+Before measurement, the harness runs every suite point once with the same input/output lengths,
+concurrency, seed, and sampling settings but an explicit smaller `warmup_prompts` count. The
+standard suite uses `min(prompts, max(16, 2 * concurrency))`: at least two concurrency waves and
+at least 16 requests, without paying for statistically meaningful sample counts in an unmeasured
+phase. This full shape pass retains every suite shape and at least two scheduler waves; its
+diagnostic results are retained under `warmup/`.
 
 Measurement then runs three complete suite passes. `summary.tsv` reports the arithmetic mean and
 sample standard deviation of each run-level metric. `bencher.json` publishes that mean with

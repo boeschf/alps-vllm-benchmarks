@@ -38,6 +38,7 @@ SUMMARY_FIELDS = (
     "effective_input_len",
     "output_len",
     "prompts",
+    "warmup_prompts",
     "concurrency",
     "repetitions",
     "total_prompts",
@@ -69,7 +70,15 @@ BENCHER_MEASURES = {
 
 # Load and validate every point in a tab-separated benchmark suite.
 def load_suite(path: Path) -> list[dict[str, Any]]:
-    required = {"name", "scenario", "input_len", "output_len", "prompts", "concurrency"}
+    required = {
+        "name",
+        "scenario",
+        "input_len",
+        "output_len",
+        "prompts",
+        "warmup_prompts",
+        "concurrency",
+    }
     with path.open(newline="") as stream:
         reader = csv.DictReader(stream, delimiter="\t")
         missing = required.difference(reader.fieldnames or ())
@@ -85,7 +94,13 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"line {line}: duplicate benchmark name {name!r}")
             names.add(name)
             point: dict[str, Any] = {"name": name, "scenario": row["scenario"].strip()}
-            for field in ("input_len", "output_len", "prompts", "concurrency"):
+            for field in (
+                "input_len",
+                "output_len",
+                "prompts",
+                "warmup_prompts",
+                "concurrency",
+            ):
                 point[field] = int(row[field])
                 if point[field] <= 0:
                     raise ValueError(f"line {line}: {field} must be positive")
@@ -94,10 +109,27 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
                     f"line {line}: prompts must be at least {MIN_PERCENTILE_SAMPLES} "
                     "for p99 metrics"
                 )
+            if point["warmup_prompts"] > point["prompts"]:
+                raise ValueError(
+                    f"line {line}: warmup_prompts cannot exceed prompts"
+                )
+            if point["warmup_prompts"] < point["concurrency"]:
+                raise ValueError(
+                    f"line {line}: warmup_prompts must reach concurrency"
+                )
             points.append(point)
     if not points:
         raise ValueError("suite contains no benchmark points")
     return points
+
+
+# Replace the statistical measurement volume with the point's explicit warmup volume.
+def make_warmup_point(point: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **point,
+        "measurement_prompts": point["prompts"],
+        "prompts": point["warmup_prompts"],
+    }
 
 
 # Convert an arbitrary label into a stable identifier component.
@@ -451,7 +483,7 @@ def main() -> int:
         "measurement_warmups_per_repetition": args.warmups,
         "pre_measurement_warmup": {
             "full_suite_passes": 1,
-            "prompts": "same-as-measurement",
+            "prompts": "warmup_prompts",
             "point_order": [point["name"] for point in points],
         },
         "seed": 0,
@@ -545,6 +577,7 @@ def main() -> int:
         atomic_json(output_dir / "manifest.json", manifest)
         log_status(f"full-suite warmup: starting; points={len(points)}")
         for index, point in enumerate(points, start=1):
+            warmup = make_warmup_point(point)
             effective_input_len = (
                 point["input_len"] + token_alignment["chat_template_token_overhead"]
             )
@@ -552,24 +585,25 @@ def main() -> int:
             log_status(
                 f"{point_label}: starting; "
                 f"in={point['input_len']} effective_in={effective_input_len} "
-                f"out={point['output_len']} prompts={point['prompts']} "
+                f"out={point['output_len']} prompts={warmup['prompts']} "
+                f"measurement_prompts={point['prompts']} "
                 f"concurrency={point['concurrency']}"
             )
             warmup_file = warmup_dir / f"{point['name']}.json"
             command = build_benchmark_command(
                 args,
-                point,
+                warmup,
                 warmup_file,
                 label=f"warmup-{point['name']}",
                 warmups=0,
             )
             run_with_heartbeat(command, point_label)
             _, total_input_tokens = load_benchmark_result(
-                warmup_file, point, effective_input_len
+                warmup_file, warmup, effective_input_len
             )
             manifest["warmup"]["points"].append(
                 {
-                    **point,
+                    **warmup,
                     "effective_input_len": effective_input_len,
                     "total_input_tokens": total_input_tokens,
                     "raw_result": str(warmup_file.relative_to(output_dir)),

@@ -17,6 +17,7 @@ from benchmark import (
     MIN_PERCENTILE_SAMPLES,
     aggregate_measurements,
     load_suite,
+    make_warmup_point,
     publish_jit_cache_after_warmup,
     run_with_heartbeat,
 )
@@ -30,6 +31,34 @@ class BenchmarkStatisticsTests(unittest.TestCase):
         self.assertTrue(
             all(point["prompts"] >= MIN_PERCENTILE_SAMPLES for point in points)
         )
+
+    def test_standard_suite_uses_two_wave_warmup_counts(self) -> None:
+        points = load_suite(ROOT / "benchmarks" / "standard.tsv")
+
+        for point in points:
+            expected = min(
+                point["prompts"],
+                max(16, 2 * point["concurrency"]),
+            )
+            self.assertEqual(point["warmup_prompts"], expected)
+            warmup = make_warmup_point(point)
+            self.assertEqual(warmup["prompts"], expected)
+            self.assertEqual(warmup["measurement_prompts"], point["prompts"])
+
+    def test_warmup_must_reach_requested_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            suite = Path(temporary) / "suite.tsv"
+            suite.write_text(
+                "name\tscenario\tinput_len\toutput_len\tprompts\t"
+                "warmup_prompts\tconcurrency\n"
+                "invalid\ttest\t32\t8\t100\t3\t4\n"
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "warmup_prompts must reach concurrency",
+            ):
+                load_suite(suite)
 
     def test_repetitions_emit_mean_and_sample_standard_deviation(self) -> None:
         results = [
