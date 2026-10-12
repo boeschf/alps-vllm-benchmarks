@@ -20,6 +20,7 @@ class ScenarioAllocationTests(unittest.TestCase):
             "openai",
         )
         self.assertEqual(resolved["server"]["kv-cache-dtype"], "bfloat16")
+        self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.88)
 
     def test_rocm_uses_explicit_mi300a_numa_binding(self) -> None:
         resolved = resolve_scenario("baseline", "rocm")
@@ -37,6 +38,7 @@ class ScenarioAllocationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(resolved["environment"]["VLLM_ROCM_USE_AITER"], "1")
+        self.assertEqual(server["gpu-memory-utilization"], 0.95)
 
     def test_cuda_uses_explicit_gh200_numa_binding(self) -> None:
         resolved = resolve_scenario("baseline", "cuda")

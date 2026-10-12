@@ -85,7 +85,7 @@ and emits the exact vLLM YAML plus `scenario.env`. Components compose with `+`.
 
 | Scenario | Change | Constraints or notes |
 |---|---|---|
-| `baseline` (default) | `allgather_reducescatter` | TP=2; BF16 KV cache; external KV and prefix caching off |
+| `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; intended for decode-heavy traffic |
 | `uccl-ht` | `deepep_high_throughput` | `deep_gemm`, GPU memory 0.80; intended for prefill-heavy experiments |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
