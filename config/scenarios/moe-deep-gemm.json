@@ -1,0 +1,13 @@
+{
+  "id": "moe-deep-gemm",
+  "description": "Pin DeepGEMM for local FP8 MoE expert computation independently of the all-to-all backend.",
+  "constraints": {
+    "platforms": ["cuda"]
+  },
+  "server": {
+    "moe-backend": "deep_gemm"
+  },
+  "features": {
+    "moe_backend": "deep_gemm"
+  }
+}

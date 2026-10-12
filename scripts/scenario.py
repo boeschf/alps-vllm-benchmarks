@@ -219,13 +219,6 @@ def validate_server(resolved: dict[str, Any], environment: dict[str, str]) -> No
             raise ValueError(
                 f"UCCL scenario is missing required CXI environment: {missing}"
             )
-    if backend == "deepep_high_throughput":
-        if server.get("moe-backend") != "deep_gemm":
-            raise ValueError("deepep_high_throughput requires moe-backend=deep_gemm")
-        if float(server["gpu-memory-utilization"]) > 0.80:
-            raise ValueError(
-                "deepep_high_throughput requires gpu-memory-utilization <= 0.80 on GH200"
-            )
 
 
 # Validate an allocation and write its runtime scenario files.

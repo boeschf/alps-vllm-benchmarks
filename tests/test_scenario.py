@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from scenario import resolve_scenario, select_nodes
+from scenario import resolve_scenario, select_nodes, validate_server
 
 
 class ScenarioAllocationTests(unittest.TestCase):
@@ -91,13 +91,7 @@ class ScenarioAllocationTests(unittest.TestCase):
                         },
                     )
 
-    def test_scenario_memory_overrides_platform_default(self) -> None:
-        self.assertEqual(
-            resolve_scenario("uccl-ht", "cuda")["server"][
-                "gpu-memory-utilization"
-            ],
-            0.8,
-        )
+    def test_intentional_scenario_memory_overrides_platform_default(self) -> None:
         self.assertEqual(
             resolve_scenario("production", "cuda")["server"][
                 "gpu-memory-utilization"
@@ -110,6 +104,46 @@ class ScenarioAllocationTests(unittest.TestCase):
             ],
             0.7,
         )
+
+    def test_uccl_ht_inherits_compute_and_memory_defaults(self) -> None:
+        baseline = resolve_scenario("baseline", "cuda")
+        resolved = resolve_scenario("uccl-ht", "cuda")
+
+        validate_server(resolved, resolved["environment"])
+        self.assertEqual(
+            resolved["server"]["all2all-backend"],
+            "deepep_high_throughput",
+        )
+        self.assertEqual(
+            resolved["server"]["gpu-memory-utilization"],
+            baseline["server"]["gpu-memory-utilization"],
+        )
+        self.assertNotIn("moe-backend", resolved["server"])
+
+    def test_deep_gemm_component_composes_with_all_all2all_backends(self) -> None:
+        scenarios = {
+            "moe-deep-gemm": "allgather_reducescatter",
+            "uccl-ll+moe-deep-gemm": "deepep_low_latency",
+            "uccl-ht+moe-deep-gemm": "deepep_high_throughput",
+        }
+
+        for scenario, all2all_backend in scenarios.items():
+            with self.subTest(scenario=scenario):
+                resolved = resolve_scenario(scenario, "cuda")
+                validate_server(resolved, resolved["environment"])
+                self.assertEqual(
+                    resolved["server"]["all2all-backend"],
+                    all2all_backend,
+                )
+                self.assertEqual(resolved["server"]["moe-backend"], "deep_gemm")
+                self.assertEqual(
+                    resolved["server"]["gpu-memory-utilization"],
+                    0.88,
+                )
+
+    def test_deep_gemm_component_is_cuda_only(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not support platform rocm"):
+            resolve_scenario("moe-deep-gemm", "rocm")
 
     def test_scalable_scenario_accepts_larger_allocation(self) -> None:
         resolved = resolve_scenario("uccl-ll+eplb", "cuda")
@@ -136,6 +170,9 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(select_nodes(resolved), 8)
         with self.assertRaisesRegex(ValueError, "requires exactly 8 nodes"):
             select_nodes(resolved, 12)
+        prefill_server = resolved["deployments"]["prefill"]["server"]
+        self.assertNotIn("moe-backend", prefill_server)
+        self.assertNotIn("gpu-memory-utilization", prefill_server)
 
     def test_platform_constraint_is_checked_before_submission(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):

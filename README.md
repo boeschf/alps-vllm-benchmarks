@@ -91,7 +91,8 @@ resolver then validates platform and topology constraints and emits the exact vL
 |---|---|---|
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; intended for decode-heavy traffic |
-| `uccl-ht` | `deepep_high_throughput` | `deep_gemm`, GPU memory 0.80; intended for prefill-heavy experiments |
+| `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; inherits the platform memory budget and automatic MoE kernel selection |
+| `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable independently of the all-to-all backend |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
 | `eplb` | Expert load balancing | 32 redundant experts with the Gloo communicator |
 | `offload-uva` | UVA weight offload | 16 GiB per GPU |
@@ -105,10 +106,12 @@ resolver then validates platform and topology constraints and emits the exact vL
 
 The resolver rejects the incompatibilities it explicitly encodes; ordered overlays otherwise use
 normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
-utilization and eager execution. Evidence from the predecessor investigation found the
-high-throughput backend unsuitable for decode, but `uccl-ht` remains available as a standalone
-prefill-heavy experiment. `disaggregated-pd` uses high throughput for prefill and low latency for
-decode.
+utilization and eager execution. The UCCL components change only all-to-all communication and its
+CXI transport settings; use `moe-deep-gemm`, `uccl-ll+moe-deep-gemm`, and
+`uccl-ht+moe-deep-gemm` to pin the same expert-compute backend across a comparison. Evidence from
+the predecessor investigation found the high-throughput backend unsuitable for decode, but
+`uccl-ht` remains available as a standalone prefill-heavy experiment. `disaggregated-pd` uses high
+throughput for prefill and low latency for decode.
 
 ## Submit serving
 

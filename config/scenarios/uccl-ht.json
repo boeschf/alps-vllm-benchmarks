@@ -2,9 +2,7 @@
   "id": "uccl-ht",
   "description": "UCCL-EP through the DeepEP-compatible high-throughput backend for prefill-heavy traffic.",
   "server": {
-    "all2all-backend": "deepep_high_throughput",
-    "moe-backend": "deep_gemm",
-    "gpu-memory-utilization": 0.8
+    "all2all-backend": "deepep_high_throughput"
   },
   "environment": {
     "FI_PROVIDER": "cxi",

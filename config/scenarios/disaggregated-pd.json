@@ -25,12 +25,10 @@
       "bootstrap_port": 8998,
       "server": {
         "all2all-backend": "deepep_high_throughput",
-        "moe-backend": "deep_gemm",
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
           "kv_role": "kv_producer"
-        },
-        "gpu-memory-utilization": 0.8
+        }
       }
     },
     "decode": {
