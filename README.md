@@ -198,11 +198,12 @@ script requests four hours to accommodate the warmup and three separate timed pa
 Each completed run is written under `results/<run-id>/`:
 
 ```text
-manifest.json               Run state, provenance, topology, commands, and fingerprints
-summary.tsv                 Human-readable metrics for every point
-bencher.json                Bencher custom-measure payload
+manifest.json                    Run state, provenance, topology, commands, and fingerprints
+summary.tsv                      Human-readable metrics for every point
+bencher.json                     Bencher custom-measure payload
+submitted-batch-script.sbatch    Exact Slurm spool script executed by the job
 raw/<point>/repetition-<n>.json  Original vLLM result for each measured repetition
-warmup/<point>.json         Unmeasured full-suite warmup result for each point
+warmup/<point>.json              Unmeasured full-suite warmup result for each point
 ```
 
 ## Persistent JIT cache
@@ -249,15 +250,17 @@ caches without changing inference correctness.
 
 ## Benchmark provenance and Bencher
 
-`manifest.json` schema 2 records the repository state, model identity, image and EDF, resolved
-scenario, topology, per-node runtime identities, exact server and benchmark commands, cache
-status, and result hashes.
+`manifest.json` schema 2 records the repository state, the exact Slurm spool script, model identity,
+image and EDF, resolved scenario, topology, per-node runtime identities, complete executed server
+and benchmark commands, cache status, and result hashes.
 
 Two fingerprints separate experiment identity from record integrity:
 
-- `experiment_fingerprint` covers relevant tracked and untracked source files, model metadata and
-  shard inventory, image, EDF, scenario, topology, stable runtime identity, and suite definition;
-- `record_fingerprint` additionally covers the completed output artifacts.
+- `experiment_fingerprint` covers relevant tracked and untracked source files, the executed Slurm
+  batch-script checksum, model metadata and shard inventory, image, EDF, scenario, topology, stable
+  runtime identity, and suite definition;
+- `record_fingerprint` additionally covers the completed output artifacts, including the archived
+  batch script.
 
 Hostnames, timestamps, and concrete node names are excluded from the fingerprints so equivalent
 runs on the same allocation shape retain the same experiment identity.

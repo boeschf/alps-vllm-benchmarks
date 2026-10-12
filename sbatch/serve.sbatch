@@ -80,6 +80,10 @@ LOGROOT="${LOGROOT:-${ROOT}/logs}"
 RESULTS_ROOT="${RESULTS_ROOT:-${ROOT}/results}"
 LOGDIR="${LOGROOT}/run-${SLURM_JOB_ID}"
 mkdir -p "${LOGDIR}" "${RESULTS_ROOT}"
+SLURM_BATCH_SCRIPT="${LOGDIR}/submitted-batch-script.sbatch"
+# BASH_SOURCE points at Slurm's immutable spool copy while this job is running.
+# Archive those executed bytes; never use the spool path to locate the repository.
+cp -- "${BASH_SOURCE[0]}" "${SLURM_BATCH_SCRIPT}"
 SCENARIO_DIR="${LOGDIR}/scenario"
 mkdir -p "${SCENARIO_DIR}"
 JIT_CACHE_MODE="${JIT_CACHE_MODE:-readwrite}"
@@ -269,6 +273,7 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
       --scenario-config "${SCENARIO_RESOLVED}" \
       --edf "${EDF}" \
       --logdir "${LOGDIR}" \
+      --batch-script "${SLURM_BATCH_SCRIPT}" \
       --bencher-project "${BENCHER_PROJECT}" \
       --bencher-testbed "${BENCHER_TESTBED}"
   echo "benchmark complete"

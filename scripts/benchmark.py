@@ -318,6 +318,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenario-config", type=Path, required=True)
     parser.add_argument("--edf", type=Path, required=True)
     parser.add_argument("--logdir", type=Path, required=True)
+    parser.add_argument("--batch-script", type=Path, required=True)
     parser.add_argument("--bencher-project", required=True)
     parser.add_argument("--bencher-testbed", required=True)
     parser.add_argument("--warmups", type=int, default=1)
@@ -335,6 +336,7 @@ def main() -> int:
     scenario_path = args.scenario_config.resolve()
     edf_path = args.edf.resolve()
     logdir = args.logdir.resolve()
+    batch_script_path = args.batch_script.resolve()
     points = load_suite(suite_path)
     scenario = json.loads(scenario_path.read_text())
     scenario_id = str(scenario["id"])
@@ -353,6 +355,12 @@ def main() -> int:
     raw_dir.mkdir(parents=True, exist_ok=False)
     warmup_dir = output_dir / "warmup"
     warmup_dir.mkdir()
+    archived_batch_script = output_dir / "submitted-batch-script.sbatch"
+    archived_batch_script.write_bytes(batch_script_path.read_bytes())
+    batch_script_identity = {
+        "path": archived_batch_script.relative_to(output_dir).as_posix(),
+        "sha256": file_sha256(archived_batch_script),
+    }
 
     nodes = int(os.getenv("SLURM_JOB_NUM_NODES", "1"))
     gpus_per_node = int(os.getenv("GPUS_PER_NODE", "4"))
@@ -403,6 +411,7 @@ def main() -> int:
         "source": {
             "revision": repository["revision"],
             "source_tree_sha256": repository["source_tree_sha256"],
+            "slurm_batch_script_sha256": batch_script_identity["sha256"],
         },
         "model": model_for_fingerprint,
         "image_ref": args.image_ref,
@@ -453,6 +462,7 @@ def main() -> int:
             "job_id": os.getenv("SLURM_JOB_ID"),
             "account": os.getenv("SLURM_JOB_ACCOUNT"),
             "partition": os.getenv("SLURM_JOB_PARTITION"),
+            "batch_script": batch_script_identity,
         },
         "topology": topology,
         "runtime": runtime_records,

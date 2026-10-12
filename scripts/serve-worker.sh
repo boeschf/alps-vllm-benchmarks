@@ -92,12 +92,6 @@ printf '[node %s] host=%s platform=%s role=%s scenario=%s TP=%s DP=%s local-DP=%
 CONFIG_ARGS=(--config "${CONFIG}")
 python -c 'import torch, vllm; print(f"torch={torch.__version__} cuda={torch.version.cuda} hip={torch.version.hip} vllm={vllm.__version__}")'
 
-# The runtime-fingerprint capture must match the interpreter that vLLM runs on
-python3 "${ROOT}/scripts/runtime-fingerprint.py" \
-  --output "${LOGDIR}/runtime-${role}-node${NODE_RANK}.json" \
-  --command-output "${LOGDIR}/server-command-${role}-node${NODE_RANK}.json" \
-  -- vllm serve "${CONFIG_ARGS[@]}"
-
 COMMON=(
   "${CONFIG_ARGS[@]}"
   --tensor-parallel-size "${TP_SIZE}"
@@ -106,6 +100,26 @@ COMMON=(
   --data-parallel-address "${HEAD_IP}"
   --data-parallel-rpc-port "${DP_RPC_PORT}"
 )
+if (( NODE_RANK == 0 )); then
+  SERVER_COMMAND=(
+    vllm serve "${COMMON[@]}"
+    --host 0.0.0.0
+    --port "${API_PORT}"
+  )
+else
+  SERVER_COMMAND=(
+    vllm serve "${COMMON[@]}"
+    --headless
+    --data-parallel-start-rank "${START_RANK}"
+  )
+fi
+
+# Record the complete command that this node will execute, including all
+# topology and head/headless arguments.
+python3 "${ROOT}/scripts/runtime-fingerprint.py" \
+  --output "${LOGDIR}/runtime-${role}-node${NODE_RANK}.json" \
+  --command-output "${LOGDIR}/server-command-${role}-node${NODE_RANK}.json" \
+  -- "${SERVER_COMMAND[@]}"
 
 if [[ "${MOONCAKE_STORE_ENABLED:-0}" == "1" && "${NODE_RANK}" == "0" ]]; then
   command -v mooncake_master >/dev/null || {
@@ -118,12 +132,5 @@ if [[ "${MOONCAKE_STORE_ENABLED:-0}" == "1" && "${NODE_RANK}" == "0" ]]; then
   echo "[node 0] mooncake_master started on ${MOONCAKE_MASTER_PORT} (pid $!)"
 fi
 
-if (( NODE_RANK == 0 )); then
-  exec vllm serve "${COMMON[@]}" \
-    --host 0.0.0.0 --port "${API_PORT}" \
-    2>&1 | tee "${LOGDIR}/serve-${role}-node0.log"
-else
-  exec vllm serve "${COMMON[@]}" --headless \
-    --data-parallel-start-rank "${START_RANK}" \
-    2>&1 | tee "${LOGDIR}/serve-${role}-node${NODE_RANK}.log"
-fi
+exec "${SERVER_COMMAND[@]}" \
+  2>&1 | tee "${LOGDIR}/serve-${role}-node${NODE_RANK}.log"
