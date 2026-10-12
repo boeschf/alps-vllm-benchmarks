@@ -37,6 +37,7 @@
       "rpc_port": 13346,
       "server": {
         "all2all-backend": "deepep_low_latency",
+        "max-num-batched-tokens": 1024,
         "kv-transfer-config": {
           "kv_connector": "MooncakeConnector",
           "kv_role": "kv_consumer"

@@ -105,6 +105,15 @@ class ScenarioAllocationTests(unittest.TestCase):
             0.7,
         )
 
+    def test_uccl_ll_bounds_low_latency_rdma_capacity(self) -> None:
+        baseline = resolve_scenario("baseline", "cuda")
+        resolved = resolve_scenario("uccl-ll", "cuda")
+        composed = resolve_scenario("uccl-ll+moe-deep-gemm", "cuda")
+
+        self.assertEqual(baseline["server"]["max-num-batched-tokens"], 2048)
+        self.assertEqual(resolved["server"]["max-num-batched-tokens"], 1024)
+        self.assertEqual(composed["server"]["max-num-batched-tokens"], 1024)
+
     def test_uccl_ht_inherits_compute_and_memory_defaults(self) -> None:
         baseline = resolve_scenario("baseline", "cuda")
         resolved = resolve_scenario("uccl-ht", "cuda")
@@ -173,6 +182,8 @@ class ScenarioAllocationTests(unittest.TestCase):
         prefill_server = resolved["deployments"]["prefill"]["server"]
         self.assertNotIn("moe-backend", prefill_server)
         self.assertNotIn("gpu-memory-utilization", prefill_server)
+        decode_server = resolved["deployments"]["decode"]["server"]
+        self.assertEqual(decode_server["max-num-batched-tokens"], 1024)
 
     def test_platform_constraint_is_checked_before_submission(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):

@@ -2,7 +2,8 @@
   "id": "uccl-ll",
   "description": "UCCL-EP through the DeepEP-compatible low-latency backend for decode-heavy traffic.",
   "server": {
-    "all2all-backend": "deepep_low_latency"
+    "all2all-backend": "deepep_low_latency",
+    "max-num-batched-tokens": 1024
   },
   "environment": {
     "FI_PROVIDER": "cxi",
