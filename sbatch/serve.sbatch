@@ -18,6 +18,11 @@
 # SCENARIO selects config/scenarios/<name>.json; components compose with '+'.
 set -euo pipefail
 
+# Emit one UTC timestamped orchestration line in the Slurm output.
+status() {
+  printf '[status %s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
 EXPECTED_NODES="${EXPECTED_NODES:?submit with scripts/submit-serve.py}"
 case "${EXPECTED_NODES}" in
   0|*[!0-9]*) echo "invalid EXPECTED_NODES=${EXPECTED_NODES}" >&2; exit 2 ;;
@@ -84,6 +89,7 @@ SLURM_BATCH_SCRIPT="${LOGDIR}/submitted-batch-script.sbatch"
 # BASH_SOURCE points at Slurm's immutable spool copy while this job is running.
 # Archive those executed bytes; never use the spool path to locate the repository.
 cp -- "${BASH_SOURCE[0]}" "${SLURM_BATCH_SCRIPT}"
+status "job ${SLURM_JOB_ID} starting; submit_dir=${ROOT} logdir=${LOGDIR}"
 SCENARIO_DIR="${LOGDIR}/scenario"
 mkdir -p "${SCENARIO_DIR}"
 JIT_CACHE_MODE="${JIT_CACHE_MODE:-readwrite}"
@@ -105,6 +111,7 @@ rm -f "${JIT_CACHE_TRIGGER}"
 mapfile -t NODES < <(scontrol show hostnames "${SLURM_JOB_NODELIST}" | sort)
 HEAD_NODE="${NODES[0]}"
 HEAD_IP="$(getent hosts "${HEAD_NODE}" | awk 'NR == 1 {print $1}')"
+status "materializing scenario=${SCENARIO} platform=${PLATFORM}"
 HEAD_IP="${HEAD_IP:-${HEAD_NODE}}"
 
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
@@ -118,6 +125,7 @@ GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
   --load-format "${LOAD_FORMAT}" \
   --head-ip "${HEAD_IP}" \
   --output-dir "${SCENARIO_DIR}"
+status "scenario materialized; config=${SCENARIO_DIR}/scenario.json"
 
 # shellcheck source=/dev/null
 source "${SCENARIO_DIR}/scenario.env"
@@ -173,6 +181,7 @@ run_workers() {
     "${nodelist_args[@]}" \
     -u env DEPLOYMENT_ROLE="${role}" bash "${ROOT}/scripts/serve-worker.sh" &
   SERVE_PIDS+=("$!")
+  status "serving role launched; role=${role} nodes=${node_list:-all} step_pid=$!"
 }
 
 if [[ "${SERVING_MODE}" == "single" ]]; then
@@ -191,6 +200,7 @@ if [[ "${SERVING_MODE}" == "disaggregated" ]]; then
     "${WORKER_ARGS[@]}" \
     -u bash "${ROOT}/scripts/proxy-worker.sh" &
   PROXY_PID=$!
+  status "proxy launched; node=${HEAD_NODE} step_pid=${PROXY_PID}"
 fi
 
 # Terminate every serving step and the optional proxy.
@@ -216,6 +226,7 @@ serving_processes_alive() {
 # Wait for one serving endpoint to become healthy.
 wait_for_health() {
   local url="$1" label="$2" ready=0
+  status "readiness wait starting; label=${label} url=${url}"
   for attempt in $(seq 1 "${READY_ATTEMPTS:-480}"); do
     if ! serving_processes_alive; then
       echo "a serving or proxy step exited before ${label} readiness" >&2
@@ -226,7 +237,8 @@ wait_for_health() {
       break
     fi
     sleep "${READY_INTERVAL_SECONDS:-15}"
-    (( attempt % 8 != 0 )) || echo "still waiting for ${url} (${attempt} attempts)"
+    (( attempt % 4 != 0 )) || status \
+      "readiness pending; label=${label} url=${url} attempts=${attempt}"
   done
   (( ready == 1 )) || { echo "${label} did not become ready; inspect ${LOGDIR}" >&2; return 1; }
 }
@@ -239,14 +251,17 @@ else
   wait_for_health "${BASE_URL}" "server" || exit 1
 fi
 
-echo "server ready: ${BASE_URL}"
+status "server ready; url=${BASE_URL}"
+status "smoke request starting"
 "${PY[@]}" "${ROOT}/scripts/smoke-request.py" \
   --base-url "${BASE_URL}" \
   --model "${SERVED_MODEL_NAME:?scenario did not define served-model-name}" \
   --output "${LOGDIR}/completion.json"
+status "smoke request complete; output=${LOGDIR}/completion.json"
 if [[ "${JIT_CACHE_MODE}" == "readwrite" && -z "${BENCHMARK_SUITE:-}" ]]; then
   # Benchmark jobs publish after their full-suite warmup. Jobs without a suite
   # have no later warmup boundary, so capture the smoke-initialized cache now.
+  status "JIT cache publication starting after smoke"
   touch "${JIT_CACHE_TRIGGER}"
   JIT_CACHE_EXPECTED_BUNDLES="${SLURM_NNODES}"
   "${PY[@]}" "${ROOT}/scripts/jit-cache.py" publish \
@@ -254,12 +269,14 @@ if [[ "${JIT_CACHE_MODE}" == "readwrite" && -z "${BENCHMARK_SUITE:-}" ]]; then
     --output "${LOGDIR}/jit-cache-publication.json" \
     --expected-bundles "${JIT_CACHE_EXPECTED_BUNDLES}" \
     --strict
+  status "JIT cache publication complete; output=${LOGDIR}/jit-cache-publication.json"
 fi
 
 if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
   SUITE="${BENCHMARK_SUITE}"
   [[ "${SUITE}" = /* ]] || SUITE="${ROOT}/${SUITE}"
   [[ -f "${SUITE}" ]] || { echo "benchmark suite not found: ${SUITE}" >&2; exit 2; }
+  status "benchmark suite starting; suite=${SUITE}"
   srun --overlap --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" --cpus-per-task=72 \
     "${WORKER_ARGS[@]}" \
     -u python3 "${ROOT}/scripts/benchmark.py" \
@@ -276,6 +293,7 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
       --batch-script "${SLURM_BATCH_SCRIPT}" \
       --bencher-project "${BENCHER_PROJECT}" \
       --bencher-testbed "${BENCHER_TESTBED}"
+  status "benchmark suite complete"
   echo "benchmark complete"
 elif [[ "${SMOKE_ONLY:-0}" == "1" ]]; then
   echo "smoke-only run complete"

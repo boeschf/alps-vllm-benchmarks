@@ -199,6 +199,11 @@ sample standard deviation of each run-level metric. `bencher.json` publishes tha
 `lower_value` and `upper_value` set to one sample standard deviation below and above it. The batch
 script requests four hours to accommodate the warmup and three separate timed passes.
 
+Slurm output uses UTC `[status ...]` lines for scenario materialization, worker launch, readiness,
+smoke, cache publication, and benchmark phases. Readiness reports once per minute. Every warmup,
+measurement, or cache-publication subprocess reports a heartbeat every 60 seconds and a completion
+line with elapsed time.
+
 Each completed run is written under `results/<run-id>/`:
 
 ```text

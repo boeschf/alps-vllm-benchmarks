@@ -12,6 +12,7 @@ import socket
 import subprocess
 import statistics
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from script_utils import atomic_json, canonical_sha256, file_sha256
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_TEMPERATURE = 0.0
 MIN_PERCENTILE_SAMPLES = 100
+STATUS_INTERVAL_SECONDS = 60
 SUMMARY_FIELDS = (
     "name",
     "scenario",
@@ -101,6 +103,59 @@ def load_suite(path: Path) -> list[dict[str, Any]]:
 # Convert an arbitrary label into a stable identifier component.
 def slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+
+
+# Emit one UTC timestamped line that remains readable in redirected Slurm logs.
+def log_status(message: str) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"[status {timestamp}] {message}", flush=True)
+
+
+# Format monotonic elapsed time without wall-clock assumptions.
+def format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    return f"{minutes}m{seconds:02d}s"
+
+
+# Run a long command with periodic liveness messages while preserving its output.
+def run_with_heartbeat(
+    command: list[str],
+    label: str,
+    *,
+    interval_seconds: float = STATUS_INTERVAL_SECONDS,
+) -> None:
+    if interval_seconds <= 0:
+        raise ValueError("status interval must be positive")
+    started = time.monotonic()
+    process = subprocess.Popen(command)
+    try:
+        while True:
+            try:
+                return_code = process.wait(timeout=interval_seconds)
+                break
+            except subprocess.TimeoutExpired:
+                log_status(
+                    f"{label}: still running; "
+                    f"elapsed={format_elapsed(time.monotonic() - started)}"
+                )
+    except BaseException:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        raise
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, command)
+    log_status(
+        f"{label}: complete; elapsed={format_elapsed(time.monotonic() - started)}"
+    )
 
 
 # Verify both raw-token and chat-template tokenization through the serving endpoint.
@@ -297,7 +352,7 @@ def publish_jit_cache_after_warmup(
         "--strict",
     ]
     trigger.touch()
-    subprocess.run(command, check=True)
+    run_with_heartbeat(command, "JIT cache publication")
     publication = json.loads(output.read_text())
     if publication.get("status") not in {"published", "unchanged"}:
         raise RuntimeError(f"JIT cache publication did not complete: {publication}")
@@ -478,22 +533,27 @@ def main() -> int:
         },
     }
     atomic_json(output_dir / "manifest.json", manifest)
+    log_status(
+        f"benchmark run {run_id}: starting; points={len(points)} "
+        f"warmup_passes=1 measurement_passes={args.repetitions}"
+    )
 
     summary: list[dict[str, Any]] = []
     bencher: dict[str, dict[str, dict[str, float]]] = {}
     try:
         manifest["warmup"]["status"] = "running"
         atomic_json(output_dir / "manifest.json", manifest)
+        log_status(f"full-suite warmup: starting; points={len(points)}")
         for index, point in enumerate(points, start=1):
             effective_input_len = (
                 point["input_len"] + token_alignment["chat_template_token_overhead"]
             )
-            print(
-                f"[warmup {index}/{len(points)}] {point['name']}: "
+            point_label = f"warmup {index}/{len(points)} {point['name']}"
+            log_status(
+                f"{point_label}: starting; "
                 f"in={point['input_len']} effective_in={effective_input_len} "
                 f"out={point['output_len']} prompts={point['prompts']} "
-                f"concurrency={point['concurrency']}",
-                flush=True,
+                f"concurrency={point['concurrency']}"
             )
             warmup_file = warmup_dir / f"{point['name']}.json"
             command = build_benchmark_command(
@@ -503,7 +563,7 @@ def main() -> int:
                 label=f"warmup-{point['name']}",
                 warmups=0,
             )
-            subprocess.run(command, check=True)
+            run_with_heartbeat(command, point_label)
             _, total_input_tokens = load_benchmark_result(
                 warmup_file, point, effective_input_len
             )
@@ -521,10 +581,16 @@ def main() -> int:
         manifest["warmup"]["status"] = "complete"
         manifest["warmup"]["completed_at"] = datetime.now(timezone.utc).isoformat()
         atomic_json(output_dir / "manifest.json", manifest)
+        log_status("full-suite warmup: complete")
+        log_status(f"JIT cache publication phase: starting; mode={cache_mode}")
         cache_publication, cache_command = publish_jit_cache_after_warmup(logdir)
         manifest["jit_cache_publication"] = cache_publication
         manifest["jit_cache_publication_command"] = cache_command
         atomic_json(output_dir / "manifest.json", manifest)
+        log_status(
+            "JIT cache publication phase: "
+            f"complete; status={cache_publication['status']}"
+        )
 
         measurements: dict[str, list[dict[str, Any]]] = {}
         point_records: dict[str, dict[str, Any]] = {}
@@ -544,19 +610,25 @@ def main() -> int:
             point_records[point["name"]] = point_record
             manifest["points"].append(point_record)
         atomic_json(output_dir / "manifest.json", manifest)
+        log_status(
+            f"measurements: starting; passes={args.repetitions} "
+            f"invocations={args.repetitions * len(points)}"
+        )
 
         for repetition in range(1, args.repetitions + 1):
             for index, point in enumerate(points, start=1):
                 effective_input_len = point_records[point["name"]][
                     "effective_input_len"
                 ]
-                print(
-                    f"[measure pass {repetition}/{args.repetitions} "
-                    f"point {index}/{len(points)}] {point['name']}: "
+                point_label = (
+                    f"measure pass {repetition}/{args.repetitions} "
+                    f"point {index}/{len(points)} {point['name']}"
+                )
+                log_status(
+                    f"{point_label}: starting; "
                     f"in={point['input_len']} effective_in={effective_input_len} "
                     f"out={point['output_len']} prompts={point['prompts']} "
-                    f"concurrency={point['concurrency']}",
-                    flush=True,
+                    f"concurrency={point['concurrency']}"
                 )
                 raw_file = (
                     raw_dir / point["name"] / f"repetition-{repetition}.json"
@@ -568,7 +640,7 @@ def main() -> int:
                     label=f"{point['name']}-repetition-{repetition}",
                     warmups=args.warmups,
                 )
-                subprocess.run(command, check=True)
+                run_with_heartbeat(command, point_label)
                 result, total_input_tokens = load_benchmark_result(
                     raw_file, point, effective_input_len
                 )
@@ -590,6 +662,7 @@ def main() -> int:
                 )
                 atomic_json(output_dir / "manifest.json", manifest)
 
+        log_status("measurements: complete; aggregating metrics")
         for point in points:
             aggregate, bencher_measures = aggregate_measurements(
                 point["name"], measurements[point["name"]]
@@ -614,7 +687,9 @@ def main() -> int:
                 for field in BENCHER_MEASURES
             }
         atomic_json(output_dir / "manifest.json", manifest)
+        log_status("metric aggregation: complete")
     except BaseException as error:
+        log_status(f"benchmark run {run_id}: failed; error={error!r}")
         if manifest["warmup"]["status"] == "running":
             manifest["warmup"]["status"] = "failed"
         manifest["status"] = "failed"
@@ -638,9 +713,9 @@ def main() -> int:
     manifest["status"] = "complete"
     manifest["completed_at"] = datetime.now(timezone.utc).isoformat()
     atomic_json(output_dir / "manifest.json", manifest)
-    print(f"Results: {output_dir}")
-    print(f"Experiment fingerprint: {experiment_fingerprint}")
-    print(f"Record fingerprint: {manifest['record_fingerprint']}")
+    log_status(f"benchmark run {run_id}: complete; results={output_dir}")
+    log_status(f"experiment fingerprint: {experiment_fingerprint}")
+    log_status(f"record fingerprint: {manifest['record_fingerprint']}")
     return 0
 
 

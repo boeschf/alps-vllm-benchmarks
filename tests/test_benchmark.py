@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from benchmark import (
     aggregate_measurements,
     load_suite,
     publish_jit_cache_after_warmup,
+    run_with_heartbeat,
 )
 
 
@@ -54,6 +56,31 @@ class BenchmarkStatisticsTests(unittest.TestCase):
             )
 
 
+class BenchmarkHeartbeatTests(unittest.TestCase):
+    def test_long_command_reports_periodic_and_completion_status(self) -> None:
+        process = mock.Mock()
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(cmd=["fake"], timeout=60),
+            0,
+        ]
+
+        with (
+            mock.patch("benchmark.subprocess.Popen", return_value=process) as popen,
+            mock.patch("benchmark.log_status") as status,
+            mock.patch("benchmark.time.monotonic", side_effect=[0.0, 61.0, 62.0]),
+        ):
+            run_with_heartbeat(["fake"], "benchmark point")
+
+        popen.assert_called_once_with(["fake"])
+        self.assertEqual(
+            status.call_args_list,
+            [
+                mock.call("benchmark point: still running; elapsed=1m01s"),
+                mock.call("benchmark point: complete; elapsed=1m02s"),
+            ],
+        )
+
+
 class JitCachePublicationTests(unittest.TestCase):
     def test_readwrite_publication_triggers_agents_and_is_strict(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -64,8 +91,8 @@ class JitCachePublicationTests(unittest.TestCase):
             logdir.mkdir()
             staging.mkdir()
 
-            def publish(command: list[str], *, check: bool) -> None:
-                self.assertTrue(check)
+            def publish(command: list[str], label: str) -> None:
+                self.assertEqual(label, "JIT cache publication")
                 self.assertTrue(trigger.is_file())
                 output = Path(command[command.index("--output") + 1])
                 output.write_text(
@@ -80,7 +107,7 @@ class JitCachePublicationTests(unittest.TestCase):
             }
             with (
                 mock.patch.dict(os.environ, environment, clear=False),
-                mock.patch("benchmark.subprocess.run", side_effect=publish) as run,
+                mock.patch("benchmark.run_with_heartbeat", side_effect=publish) as run,
             ):
                 publication, command = publish_jit_cache_after_warmup(logdir)
 
@@ -100,7 +127,7 @@ class JitCachePublicationTests(unittest.TestCase):
             logdir = Path(temporary)
             with (
                 mock.patch.dict(os.environ, {"JIT_CACHE_MODE": "read"}, clear=False),
-                mock.patch("benchmark.subprocess.run") as run,
+                mock.patch("benchmark.run_with_heartbeat") as run,
             ):
                 publication, command = publish_jit_cache_after_warmup(logdir)
 
