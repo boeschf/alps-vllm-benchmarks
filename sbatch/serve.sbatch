@@ -240,13 +240,16 @@ echo "server ready: ${BASE_URL}"
   --base-url "${BASE_URL}" \
   --model "${SERVED_MODEL_NAME:?scenario did not define served-model-name}" \
   --output "${LOGDIR}/completion.json"
-if [[ "${JIT_CACHE_MODE}" == "readwrite" ]]; then
+if [[ "${JIT_CACHE_MODE}" == "readwrite" && -z "${BENCHMARK_SUITE:-}" ]]; then
+  # Benchmark jobs publish after their full-suite warmup. Jobs without a suite
+  # have no later warmup boundary, so capture the smoke-initialized cache now.
   touch "${JIT_CACHE_TRIGGER}"
   JIT_CACHE_EXPECTED_BUNDLES="${SLURM_NNODES}"
   "${PY[@]}" "${ROOT}/scripts/jit-cache.py" publish \
     --staging "${JIT_CACHE_STAGING}" \
     --output "${LOGDIR}/jit-cache-publication.json" \
-    --expected-bundles "${JIT_CACHE_EXPECTED_BUNDLES}"
+    --expected-bundles "${JIT_CACHE_EXPECTED_BUNDLES}" \
+    --strict
 fi
 
 if [[ -n "${BENCHMARK_SUITE:-}" ]]; then

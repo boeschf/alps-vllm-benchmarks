@@ -74,8 +74,8 @@ CACHE_STATUS="${LOGDIR}/jit-cache-${role}-node${NODE_RANK}.json"
 python3 "${ROOT}/scripts/jit-cache.py" hydrate --status "${CACHE_STATUS}"
 export JIT_CACHE_STATUS_FILE="${CACHE_STATUS}"
 
-# Every node captures its container-local /tmp cache after health and smoke
-# checks. Publishing merges all node bundles into the next shared generation.
+# Every node captures its container-local /tmp cache after the full benchmark
+# warmup, or after smoke when no benchmark suite is selected.
 if [[ "${JIT_CACHE_MODE:-readwrite}" == "readwrite" ]]; then
   python3 "${ROOT}/scripts/jit-cache.py" agent \
     --status "${CACHE_STATUS}" \

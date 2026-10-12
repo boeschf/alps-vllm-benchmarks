@@ -224,6 +224,44 @@ def load_benchmark_result(
     return result, total_input_tokens
 
 
+# Publish all node-local JIT artifacts after the full warmup and before measurement.
+def publish_jit_cache_after_warmup(
+    logdir: Path,
+) -> tuple[dict[str, Any], list[str] | None]:
+    mode = os.getenv("JIT_CACHE_MODE", "off")
+    phase = "after-full-suite-warmup"
+    if mode != "readwrite":
+        return {"status": "not-published", "mode": mode, "phase": phase}, None
+
+    required = ("JIT_CACHE_TRIGGER", "JIT_CACHE_STAGING")
+    missing = [name for name in required if not os.getenv(name)]
+    if missing:
+        raise RuntimeError(
+            "JIT cache publication is missing environment variables: "
+            + ", ".join(missing)
+        )
+    trigger = Path(os.environ["JIT_CACHE_TRIGGER"])
+    output = logdir / "jit-cache-publication.json"
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/jit-cache.py"),
+        "publish",
+        "--staging",
+        os.environ["JIT_CACHE_STAGING"],
+        "--output",
+        str(output),
+        "--expected-bundles",
+        os.getenv("SLURM_JOB_NUM_NODES", "1"),
+        "--strict",
+    ]
+    trigger.touch()
+    subprocess.run(command, check=True)
+    publication = json.loads(output.read_text())
+    if publication.get("status") not in {"published", "unchanged"}:
+        raise RuntimeError(f"JIT cache publication did not complete: {publication}")
+    return {**publication, "mode": mode, "phase": phase}, command
+
+
 # Parse benchmark execution and provenance options.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -287,12 +325,12 @@ def main() -> int:
     repository = repository_identity(ROOT)
     model = model_identity(Path(args.model), os.getenv("MODEL_REPO", "zai-org/GLM-5.3"))
     runtime_records, server_commands = load_runtime_records(logdir)
-    cache_publication_path = logdir / "jit-cache-publication.json"
-    cache_publication = (
-        json.loads(cache_publication_path.read_text())
-        if cache_publication_path.is_file()
-        else {"status": "not-published", "mode": os.getenv("JIT_CACHE_MODE", "off")}
-    )
+    cache_mode = os.getenv("JIT_CACHE_MODE", "off")
+    cache_publication = {
+        "status": "pending" if cache_mode == "readwrite" else "not-published",
+        "mode": cache_mode,
+        "phase": "after-full-suite-warmup",
+    }
     token_alignment = verify_token_alignment(args.base_url, args.served_model_name)
     suite_identity = {
         "path": str(
@@ -374,6 +412,7 @@ def main() -> int:
         "server_commands": server_commands,
         "publication": publication,
         "jit_cache_publication": cache_publication,
+        "jit_cache_publication_command": None,
         "points": [],
         "warmup": {
             "status": "pending",
@@ -424,6 +463,10 @@ def main() -> int:
             atomic_json(output_dir / "manifest.json", manifest)
         manifest["warmup"]["status"] = "complete"
         manifest["warmup"]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(output_dir / "manifest.json", manifest)
+        cache_publication, cache_command = publish_jit_cache_after_warmup(logdir)
+        manifest["jit_cache_publication"] = cache_publication
+        manifest["jit_cache_publication_command"] = cache_command
         atomic_json(output_dir / "manifest.json", manifest)
 
         for index, point in enumerate(points, start=1):

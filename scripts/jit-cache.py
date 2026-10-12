@@ -453,7 +453,8 @@ def capture_bundle(status_path: Path, staging: Path, role: str) -> dict[str, Any
 
 # Wait for the serving trigger, then capture this node's bundle.
 def wait_and_capture(status_path: Path, trigger: Path, staging: Path, role: str) -> None:
-    # The serving job creates the trigger only after its smoke request succeeds.
+    # Benchmark jobs trigger after the full-suite warmup; jobs without a suite
+    # trigger after their smoke request succeeds.
     while not trigger.exists():
         time.sleep(2)
     try:

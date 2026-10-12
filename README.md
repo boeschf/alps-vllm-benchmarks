@@ -201,11 +201,15 @@ warmup/<point>.json         Unmeasured full-suite warmup result for each point
 
 ## Persistent JIT cache
 
-Compiler hot paths stay in container-local `/tmp`. After readiness and smoke success, every node
-captures its local artifacts and the job publishes an immutable generation under `.cache/jit`.
-A compatible later job hydrates that generation before vLLM starts. Compatibility includes the
-image, Python and package versions, CUDA or ROCm version, and accelerator identity; scenarios are
-not a compatibility dimension.
+Compiler hot paths stay in container-local `/tmp`. Benchmark jobs run the full-suite warmup, then
+capture every node's local artifacts and publish an immutable generation under `.cache/jit` before
+measurement starts. Jobs without a benchmark suite publish after smoke instead. A compatible later
+job hydrates that generation before vLLM starts. Compatibility includes the image, Python and
+package versions, CUDA or ROCm version, and accelerator identity; scenarios are not a compatibility
+dimension.
+
+Cache publication is a strict barrier for benchmark jobs: publication must finish successfully
+before the first measured request is sent.
 
 The wrapper exposes the operational cache modes directly:
 
