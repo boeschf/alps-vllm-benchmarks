@@ -1,0 +1,13 @@
+{
+  "server": {
+    "gpu-memory-utilization": 0.88,
+    "numa-bind": true,
+    "numa-bind-nodes": [0, 1, 2, 3],
+    "numa-bind-cpus": [
+      "0-71",
+      "72-143",
+      "144-215",
+      "216-287"
+    ]
+  }
+}

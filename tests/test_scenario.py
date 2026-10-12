@@ -51,6 +51,65 @@ class ScenarioAllocationTests(unittest.TestCase):
             ["0-71", "72-143", "144-215", "216-287"],
         )
 
+    def test_platform_defaults_apply_to_every_supported_scenario(self) -> None:
+        expected_numa = {
+            "cuda": ["0-71", "72-143", "144-215", "216-287"],
+            "rocm": [
+                "0-23,96-119",
+                "24-47,120-143",
+                "48-71,144-167",
+                "72-95,168-191",
+            ],
+        }
+        scenario_names = sorted(
+            path.stem for path in (ROOT / "config" / "scenarios").glob("*.json")
+        )
+
+        for scenario_name in scenario_names:
+            for platform, cpu_bindings in expected_numa.items():
+                try:
+                    resolved = resolve_scenario(scenario_name, platform)
+                except ValueError as error:
+                    if "does not support platform" in str(error):
+                        continue
+                    raise
+                server = resolved["server"]
+                with self.subTest(scenario=scenario_name, platform=platform):
+                    self.assertTrue(server["numa-bind"])
+                    self.assertEqual(server["numa-bind-nodes"], [0, 1, 2, 3])
+                    self.assertEqual(server["numa-bind-cpus"], cpu_bindings)
+                    if platform == "rocm":
+                        self.assertEqual(
+                            resolved["environment"]["VLLM_ROCM_USE_AITER"],
+                            "1",
+                        )
+                    self.assertIn(
+                        f"config/platforms/{platform}.json",
+                        {
+                            source["path"]
+                            for source in resolved["source_files"]
+                        },
+                    )
+
+    def test_scenario_memory_overrides_platform_default(self) -> None:
+        self.assertEqual(
+            resolve_scenario("uccl-ht", "cuda")["server"][
+                "gpu-memory-utilization"
+            ],
+            0.8,
+        )
+        self.assertEqual(
+            resolve_scenario("production", "cuda")["server"][
+                "gpu-memory-utilization"
+            ],
+            0.87,
+        )
+        self.assertEqual(
+            resolve_scenario("uccl-ll", "rocm")["server"][
+                "gpu-memory-utilization"
+            ],
+            0.7,
+        )
 
     def test_scalable_scenario_accepts_larger_allocation(self) -> None:
         resolved = resolve_scenario("uccl-ll+eplb", "cuda")

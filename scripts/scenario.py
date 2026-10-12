@@ -16,6 +16,7 @@ from script_utils import atomic_json, atomic_text, file_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = ROOT / "config" / "scenarios"
+PLATFORM_DIR = ROOT / "config" / "platforms"
 
 
 # Recursively merge scenario mappings without mutating either input.
@@ -104,15 +105,29 @@ def parse_components(value: str) -> list[str]:
     return components
 
 
-# Merge scenario components and apply platform-specific overrides.
+# Merge platform defaults first, then scenario layers in composition order.
 def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
     components = parse_components(scenario)
     if "baseline" in components and len(components) > 1:
         raise ValueError("baseline is implicit and must not be combined explicitly")
 
     baseline_path = SCENARIO_DIR / "baseline.json"
-    resolved = load_json(baseline_path)
-    source_paths = [baseline_path]
+    platform_path = PLATFORM_DIR / f"{platform}.json"
+    if not platform_path.is_file():
+        available = ", ".join(
+            sorted(item.stem for item in PLATFORM_DIR.glob("*.json"))
+        )
+        raise ValueError(
+            f"unknown platform {platform!r}; available platform defaults: {available}"
+        )
+
+    baseline = load_json(baseline_path)
+    if "platform_overrides" in baseline:
+        raise ValueError(
+            "baseline platform defaults belong in config/platforms/<platform>.json"
+        )
+    resolved = deep_merge(baseline, load_json(platform_path))
+    source_paths = [baseline_path, platform_path]
     effective_components: list[str] = []
     if components == ["baseline"]:
         effective_components.append("baseline")
@@ -126,14 +141,13 @@ def resolve_scenario(scenario: str, platform: str) -> dict[str, Any]:
                 raise ValueError(
                     f"unknown scenario {component!r}; available: {available}"
                 )
-            resolved = deep_merge(resolved, load_json(path))
+            layer = load_json(path)
+            platform_overrides = layer.pop("platform_overrides", {})
+            resolved = deep_merge(resolved, layer)
+            if platform in platform_overrides:
+                resolved = deep_merge(resolved, platform_overrides[platform])
             source_paths.append(path)
             effective_components.append(component)
-
-    platform_overrides = resolved.pop("platform_overrides", {})
-    if platform in platform_overrides:
-        resolved = deep_merge(resolved, platform_overrides[platform])
-
     scenario_id = "+".join(effective_components)
     resolved["id"] = scenario_id
     resolved["components"] = effective_components

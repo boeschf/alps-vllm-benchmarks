@@ -1,0 +1,15 @@
+{
+  "environment": {
+    "VLLM_ROCM_USE_AITER": "1"
+  },
+  "server": {
+    "numa-bind": true,
+    "numa-bind-nodes": [0, 1, 2, 3],
+    "numa-bind-cpus": [
+      "0-23,96-119",
+      "24-47,120-143",
+      "48-71,144-167",
+      "72-95,168-191"
+    ]
+  }
+}

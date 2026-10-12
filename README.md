@@ -25,7 +25,7 @@ images from the open pull request, so changing an image remains an explicit repo
 
 | Path | Purpose |
 |---|---|
-| `config/platforms/` | Image, EDF, and loader selection for each accelerator platform |
+| `config/platforms/` | Image, EDF, loader, NUMA, and runtime defaults for each accelerator platform |
 | `config/scenarios/` | Declarative, composable serving scenarios |
 | `edf/` | Container-engine runtime definitions |
 | `scripts/submit-serve.py` | Scenario-aware Slurm submission entrypoint |
@@ -79,9 +79,13 @@ override that absolute container path when an image requires a different locatio
 
 ## Scenarios
 
-A scenario overlays `config/scenarios/baseline.json`. `scripts/scenario.py` deep-merges composed
-components, applies platform overrides, validates its encoded platform and topology constraints,
-and emits the exact vLLM YAML plus `scenario.env`. Components compose with `+`.
+`scripts/scenario.py` resolves layers in this order: `config/scenarios/baseline.json`, the selected
+`config/platforms/<platform>.json`, then scenario components from left to right. Platform defaults
+own the common CUDA and ROCm NUMA maps, CUDA's 0.88 memory budget, and
+`VLLM_ROCM_USE_AITER=1`. A scenario component can still override those defaults; its selected
+`platform_overrides` layer is applied immediately after that component's general settings. The
+resolver then validates platform and topology constraints and emits the exact vLLM YAML plus
+`scenario.env`.
 
 | Scenario | Change | Constraints or notes |
 |---|---|---|
