@@ -90,7 +90,7 @@ resolver then validates platform and topology constraints and emits the exact vL
 | Scenario | Change | Constraints or notes |
 |---|---|---|
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
-| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; decode-oriented 1024-token scheduler cap bounds its RDMA buffer |
+| `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA GPU memory 0.90; decode-oriented 1024-token scheduler cap |
 | `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; inherits the platform memory budget and automatic MoE kernel selection |
 | `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable independently of the all-to-all backend |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
@@ -106,19 +106,22 @@ resolver then validates platform and topology constraints and emits the exact vL
 
 The resolver rejects the incompatibilities it explicitly encodes; ordered overlays otherwise use
 normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
-utilization and eager execution. The UCCL components change only all-to-all communication and its
-CXI transport settings; use `moe-deep-gemm`, `uccl-ll+moe-deep-gemm`, and
+utilization and eager execution. The high-throughput UCCL component changes only all-to-all
+communication and its CXI transport settings; low latency also reserves the memory and scheduler
+capacity described below. Use `moe-deep-gemm`, `uccl-ll+moe-deep-gemm`, and
 `uccl-ht+moe-deep-gemm` to pin the same expert-compute backend across a comparison.
 
 `uccl-ll` caps `max-num-batched-tokens` at 1024 because DeepEP sizes its low-latency RDMA
 workspace from that capacity; the common 2048-token cap requested an 8 GiB allocation during
 startup profiling and exhausted GH200 memory. The lower cap reduces that workspace while retaining
-chunked prefill.
+chunked prefill. On CUDA, it also raises `gpu-memory-utilization` from 0.88 to 0.90: after CUDA
+graph capture, 0.88 left only 2.35 GiB for KV cache, below the 2.83 GiB required to preserve the
+32,768-token model limit.
 
 Evidence from the predecessor investigation found the high-throughput backend unsuitable for
 decode, but `uccl-ht` remains available as a standalone prefill-heavy experiment.
 `disaggregated-pd` uses high throughput for prefill and low latency with the same 1024-token cap
-for decode.
+and 0.90 CUDA memory utilization for decode.
 
 ## Submit serving
 

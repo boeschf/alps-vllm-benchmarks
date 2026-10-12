@@ -99,6 +99,12 @@ class ScenarioAllocationTests(unittest.TestCase):
             0.87,
         )
         self.assertEqual(
+            resolve_scenario("uccl-ll", "cuda")["server"][
+                "gpu-memory-utilization"
+            ],
+            0.9,
+        )
+        self.assertEqual(
             resolve_scenario("uccl-ll", "rocm")["server"][
                 "gpu-memory-utilization"
             ],
@@ -113,6 +119,8 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(baseline["server"]["max-num-batched-tokens"], 2048)
         self.assertEqual(resolved["server"]["max-num-batched-tokens"], 1024)
         self.assertEqual(composed["server"]["max-num-batched-tokens"], 1024)
+        self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.9)
+        self.assertEqual(composed["server"]["gpu-memory-utilization"], 0.9)
 
     def test_uccl_ht_inherits_compute_and_memory_defaults(self) -> None:
         baseline = resolve_scenario("baseline", "cuda")
@@ -131,12 +139,12 @@ class ScenarioAllocationTests(unittest.TestCase):
 
     def test_deep_gemm_component_composes_with_all_all2all_backends(self) -> None:
         scenarios = {
-            "moe-deep-gemm": "allgather_reducescatter",
-            "uccl-ll+moe-deep-gemm": "deepep_low_latency",
-            "uccl-ht+moe-deep-gemm": "deepep_high_throughput",
+            "moe-deep-gemm": ("allgather_reducescatter", 0.88),
+            "uccl-ll+moe-deep-gemm": ("deepep_low_latency", 0.9),
+            "uccl-ht+moe-deep-gemm": ("deepep_high_throughput", 0.88),
         }
 
-        for scenario, all2all_backend in scenarios.items():
+        for scenario, (all2all_backend, gpu_memory_utilization) in scenarios.items():
             with self.subTest(scenario=scenario):
                 resolved = resolve_scenario(scenario, "cuda")
                 validate_server(resolved, resolved["environment"])
@@ -147,7 +155,7 @@ class ScenarioAllocationTests(unittest.TestCase):
                 self.assertEqual(resolved["server"]["moe-backend"], "deep_gemm")
                 self.assertEqual(
                     resolved["server"]["gpu-memory-utilization"],
-                    0.88,
+                    gpu_memory_utilization,
                 )
 
     def test_deep_gemm_component_is_cuda_only(self) -> None:
@@ -184,6 +192,7 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertNotIn("gpu-memory-utilization", prefill_server)
         decode_server = resolved["deployments"]["decode"]["server"]
         self.assertEqual(decode_server["max-num-batched-tokens"], 1024)
+        self.assertEqual(decode_server["gpu-memory-utilization"], 0.9)
 
     def test_platform_constraint_is_checked_before_submission(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not support platform rocm"):
