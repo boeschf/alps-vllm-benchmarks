@@ -358,8 +358,11 @@ class PublicationTests(unittest.TestCase):
             {"vllm/config.json": b"stale"},
             base_generation=base_generation,
         )
-        result = jit_cache.publish_bundles(stale, 1)
+        output = self.root / "publication.json"
+        self.assertEqual(jit_cache.publish(stale, output, 1, strict=True), 0)
+        result = json.loads(output.read_text())
         self.assertEqual(result["status"], "conflict")
+        self.assertFalse(stale.exists())
         namespace = jit_cache.namespace_path(result["compatibility_key"], platform_name="cuda")
         self.assertEqual((namespace / "CURRENT").read_text().strip(), advanced["generation"])
 

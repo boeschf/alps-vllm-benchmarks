@@ -386,7 +386,7 @@ def publish_jit_cache_after_warmup(
     trigger.touch()
     run_with_heartbeat(command, "JIT cache publication")
     publication = json.loads(output.read_text())
-    if publication.get("status") not in {"published", "unchanged"}:
+    if publication.get("status") not in {"published", "unchanged", "conflict"}:
         raise RuntimeError(f"JIT cache publication did not complete: {publication}")
     return {**publication, "mode": mode, "phase": phase}, command
 

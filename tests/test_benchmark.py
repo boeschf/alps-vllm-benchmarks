@@ -151,6 +151,43 @@ class JitCachePublicationTests(unittest.TestCase):
                 "4",
             )
 
+    def test_concurrent_cache_conflict_does_not_abort_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            logdir = directory / "logs"
+            staging = directory / "staging"
+            trigger = directory / "publish.trigger"
+            logdir.mkdir()
+            staging.mkdir()
+
+            def publish(command: list[str], label: str) -> None:
+                output = Path(command[command.index("--output") + 1])
+                output.write_text(
+                    json.dumps(
+                        {
+                            "status": "conflict",
+                            "generation": "concurrent",
+                            "conflicts": ["vllm/kernel.cubin"],
+                        }
+                    )
+                )
+
+            environment = {
+                "JIT_CACHE_MODE": "readwrite",
+                "JIT_CACHE_TRIGGER": str(trigger),
+                "JIT_CACHE_STAGING": str(staging),
+                "SLURM_JOB_NUM_NODES": "4",
+            }
+            with (
+                mock.patch.dict(os.environ, environment, clear=False),
+                mock.patch("benchmark.run_with_heartbeat", side_effect=publish),
+            ):
+                publication, command = publish_jit_cache_after_warmup(logdir)
+
+            self.assertEqual(publication["status"], "conflict")
+            self.assertEqual(publication["generation"], "concurrent")
+            self.assertIsNotNone(command)
+
     def test_read_mode_does_not_trigger_or_publish(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             logdir = Path(temporary)

@@ -122,7 +122,7 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.9)
         self.assertEqual(composed["server"]["gpu-memory-utilization"], 0.9)
 
-    def test_uccl_ht_inherits_compute_and_memory_defaults(self) -> None:
+    def test_uccl_ht_uses_cuda_deep_gemm_workaround(self) -> None:
         baseline = resolve_scenario("baseline", "cuda")
         resolved = resolve_scenario("uccl-ht", "cuda")
 
@@ -131,17 +131,27 @@ class ScenarioAllocationTests(unittest.TestCase):
             resolved["server"]["all2all-backend"],
             "deepep_high_throughput",
         )
+        self.assertEqual(resolved["server"]["moe-backend"], "deep_gemm")
         self.assertEqual(
             resolved["server"]["gpu-memory-utilization"],
             baseline["server"]["gpu-memory-utilization"],
         )
-        self.assertNotIn("moe-backend", resolved["server"])
 
-    def test_deep_gemm_component_composes_with_all_all2all_backends(self) -> None:
+    def test_uccl_ht_keeps_rocm_backend_selection(self) -> None:
+        resolved = resolve_scenario("uccl-ht", "rocm")
+
+        validate_server(resolved, resolved["environment"])
+        self.assertEqual(
+            resolved["server"]["all2all-backend"],
+            "deepep_high_throughput",
+        )
+        self.assertNotIn("moe-backend", resolved["server"])
+        self.assertEqual(resolved["environment"]["VLLM_ROCM_USE_AITER"], "1")
+
+    def test_deep_gemm_component_composes_with_baseline_and_low_latency(self) -> None:
         scenarios = {
             "moe-deep-gemm": ("allgather_reducescatter", 0.88),
             "uccl-ll+moe-deep-gemm": ("deepep_low_latency", 0.9),
-            "uccl-ht+moe-deep-gemm": ("deepep_high_throughput", 0.88),
         }
 
         for scenario, (all2all_backend, gpu_memory_utilization) in scenarios.items():

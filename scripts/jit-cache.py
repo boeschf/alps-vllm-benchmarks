@@ -752,7 +752,7 @@ def publish(staging: Path, output: Path, expected: int, strict: bool) -> int:
         return 1 if strict else 0
     atomic_json(output, result)
     print(f"JIT cache publication: {result}", flush=True)
-    if result["status"] in {"published", "unchanged"}:
+    if result["status"] in {"published", "unchanged", "conflict"}:
         shutil.rmtree(staging, ignore_errors=True)
     return 0
 

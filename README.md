@@ -91,8 +91,8 @@ resolver then validates platform and topology constraints and emits the exact vL
 |---|---|---|
 | `baseline` (default) | `allgather_reducescatter` | TP=2; CUDA GPU memory 0.88; BF16 KV cache; external KV and prefix caching off |
 | `uccl-ll` | `deepep_low_latency` | UCCL-EP over CXI; CUDA GPU memory 0.90; decode-oriented 1024-token scheduler cap |
-| `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; inherits the platform memory budget and automatic MoE kernel selection |
-| `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable independently of the all-to-all backend |
+| `uccl-ht` | `deepep_high_throughput` | UCCL-EP over CXI; CUDA pins `deep_gemm`, while ROCm retains its platform backend selection |
+| `moe-deep-gemm` | `deep_gemm` expert kernels | CUDA-only; composable with baseline or low-latency all-to-all |
 | `mooncake-cpu` | `MooncakeStoreConnector` | Embedded 8 GB CPU segment per rank and prefix caching |
 | `eplb` | Expert load balancing | 32 redundant experts with the Gloo communicator |
 | `offload-uva` | UVA weight offload | 16 GiB per GPU |
@@ -106,10 +106,10 @@ resolver then validates platform and topology constraints and emits the exact vL
 
 The resolver rejects the incompatibilities it explicitly encodes; ordered overlays otherwise use
 normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
-utilization and eager execution. The high-throughput UCCL component changes only all-to-all
-communication and its CXI transport settings; low latency also reserves the memory and scheduler
-capacity described below. Use `moe-deep-gemm`, `uccl-ll+moe-deep-gemm`, and
-`uccl-ht+moe-deep-gemm` to pin the same expert-compute backend across a comparison.
+utilization and eager execution. On CUDA, `uccl-ht` pins DeepGEMM because automatic selection
+chose FlashInfer CUTLASS and stalled distributed engine initialization; the working path used
+DeepGEMM with `DeepEPHTPrepareAndFinalize`. ROCm retains its platform-native MoE selection. Use
+`moe-deep-gemm` or `uccl-ll+moe-deep-gemm` to pin DeepGEMM in other CUDA runs.
 
 `uccl-ll` caps `max-num-batched-tokens` at 1024 because DeepEP sizes its low-latency RDMA
 workspace from that capacity; the common 2048-token cap requested an 8 GiB allocation during
@@ -119,7 +119,7 @@ graph capture, 0.88 left only 2.35 GiB for KV cache, below the 2.83 GiB required
 32,768-token model limit.
 
 Evidence from the predecessor investigation found the high-throughput backend unsuitable for
-decode, but `uccl-ht` remains available as a standalone prefill-heavy experiment.
+decode, but `uccl-ht` remains available as a prefill-heavy experiment on either platform.
 `disaggregated-pd` uses high throughput for prefill and low latency with the same 1024-token cap
 and 0.90 CUDA memory utilization for decode.
 
@@ -240,8 +240,10 @@ job hydrates that generation before vLLM starts. Compatibility includes the imag
 package versions, CUDA or ROCm version, and accelerator identity; scenarios are not a compatibility
 dimension.
 
-Cache publication is a strict barrier for benchmark jobs: publication must finish successfully
-before the first measured request is sent.
+Cache capture is a strict barrier for benchmark jobs: capture errors stop the run before the first
+measured request. A publication conflict caused by another job advancing the same namespace keeps
+that complete generation and records the conflict, but does not discard the already-warmed
+allocation or block measurement.
 
 The wrapper exposes the operational cache modes directly:
 

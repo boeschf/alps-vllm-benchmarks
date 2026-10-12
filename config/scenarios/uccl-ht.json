@@ -13,5 +13,15 @@
   },
   "features": {
     "uccl_ep": "high_throughput"
+  },
+  "platform_overrides": {
+    "cuda": {
+      "server": {
+        "moe-backend": "deep_gemm"
+      },
+      "features": {
+        "moe_backend": "deep_gemm"
+      }
+    }
   }
 }
