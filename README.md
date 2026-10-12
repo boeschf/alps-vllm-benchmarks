@@ -185,6 +185,10 @@ before measurement, and fails if measured input-token totals differ from the exp
 post-template lengths. `summary.tsv` records both requested `input_len` and
 `effective_input_len`.
 
+Before measurement, the harness runs every suite point once with identical prompt count, input and
+output lengths, concurrency, seed, and sampling settings. This full unmeasured pass exercises all
+suite shapes; its diagnostic results are retained under `warmup/`.
+
 Each completed run is written under `results/<run-id>/`:
 
 ```text
@@ -192,6 +196,7 @@ manifest.json               Run state, provenance, topology, commands, and finge
 summary.tsv                 Human-readable metrics for every point
 bencher.json                Bencher custom-measure payload
 raw/<point>.json            Original vLLM result for each benchmark point
+warmup/<point>.json         Unmeasured full-suite warmup result for each point
 ```
 
 ## Persistent JIT cache

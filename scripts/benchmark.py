@@ -138,6 +138,92 @@ def verify_token_alignment(base_url: str, model: str) -> dict[str, Any]:
     }
 
 
+# Build one reproducible vLLM benchmark invocation.
+def build_benchmark_command(
+    args: argparse.Namespace,
+    point: dict[str, Any],
+    result_file: Path,
+    *,
+    label: str,
+    warmups: int,
+) -> list[str]:
+    return [
+        "vllm",
+        "bench",
+        "serve",
+        "--backend",
+        "openai-chat",
+        "--endpoint",
+        "/v1/chat/completions",
+        "--base-url",
+        args.base_url,
+        "--model",
+        args.served_model_name,
+        "--served-model-name",
+        args.served_model_name,
+        "--tokenizer",
+        args.model,
+        "--ignore-eos",
+        "--temperature",
+        str(BENCHMARK_TEMPERATURE),
+        "--dataset-name",
+        "random",
+        "--input-len",
+        str(point["input_len"]),
+        "--output-len",
+        str(point["output_len"]),
+        "--num-prompts",
+        str(point["prompts"]),
+        "--max-concurrency",
+        str(point["concurrency"]),
+        "--num-warmups",
+        str(warmups),
+        "--seed",
+        "0",
+        "--disable-tqdm",
+        "--percentile-metrics",
+        "ttft,tpot",
+        "--metric-percentiles",
+        "99",
+        "--save-result",
+        "--result-dir",
+        str(result_file.parent),
+        "--result-filename",
+        result_file.name,
+        "--label",
+        label,
+    ]
+
+
+# Load one completed invocation and enforce request and post-template token counts.
+def load_benchmark_result(
+    result_file: Path,
+    point: dict[str, Any],
+    effective_input_len: int,
+) -> tuple[dict[str, Any], int]:
+    result_file.with_suffix(".pytorch.json").unlink(missing_ok=True)
+    result = json.loads(result_file.read_text())
+    completed = int(result.get("completed", 0))
+    failed = int(result.get("failed", 0))
+    if completed != point["prompts"] or failed:
+        raise RuntimeError(
+            f"{point['name']}: completed={completed}/{point['prompts']}, failed={failed}"
+        )
+    total_input_tokens = result.get("total_input_tokens")
+    if not isinstance(total_input_tokens, int):
+        raise RuntimeError(
+            f"{point['name']}: vLLM result is missing integer total_input_tokens"
+        )
+    expected_input_tokens = effective_input_len * completed
+    if total_input_tokens != expected_input_tokens:
+        raise RuntimeError(
+            f"{point['name']}: post-template input length mismatch: "
+            f"observed={total_input_tokens}, expected={expected_input_tokens} "
+            f"({effective_input_len} per request)"
+        )
+    return result, total_input_tokens
+
+
 # Parse benchmark execution and provenance options.
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -181,6 +267,8 @@ def main() -> int:
     output_dir = args.output_root.resolve() / run_id
     raw_dir = output_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=False)
+    warmup_dir = output_dir / "warmup"
+    warmup_dir.mkdir()
 
     nodes = int(os.getenv("SLURM_JOB_NUM_NODES", "1"))
     gpus_per_node = int(os.getenv("GPUS_PER_NODE", "4"))
@@ -212,7 +300,12 @@ def main() -> int:
         ),
         "sha256": file_sha256(suite_path),
         "points": points,
-        "warmups_per_point": args.warmups,
+        "measurement_warmups_per_point": args.warmups,
+        "pre_measurement_warmup": {
+            "full_suite_passes": 1,
+            "prompts": "same-as-measurement",
+            "point_order": [point["name"] for point in points],
+        },
         "seed": 0,
         "dataset": "random",
         "ignore_eos": True,
@@ -282,92 +375,80 @@ def main() -> int:
         "publication": publication,
         "jit_cache_publication": cache_publication,
         "points": [],
+        "warmup": {
+            "status": "pending",
+            "full_suite_passes": 1,
+            "points": [],
+        },
     }
     atomic_json(output_dir / "manifest.json", manifest)
 
     summary: list[dict[str, Any]] = []
     bencher: dict[str, dict[str, dict[str, float]]] = {}
     try:
+        manifest["warmup"]["status"] = "running"
+        atomic_json(output_dir / "manifest.json", manifest)
         for index, point in enumerate(points, start=1):
             effective_input_len = (
                 point["input_len"] + token_alignment["chat_template_token_overhead"]
             )
             print(
-                f"[{index}/{len(points)}] {point['name']}: "
+                f"[warmup {index}/{len(points)}] {point['name']}: "
+                f"in={point['input_len']} effective_in={effective_input_len} "
+                f"out={point['output_len']} prompts={point['prompts']} "
+                f"concurrency={point['concurrency']}",
+                flush=True,
+            )
+            warmup_file = warmup_dir / f"{point['name']}.json"
+            command = build_benchmark_command(
+                args,
+                point,
+                warmup_file,
+                label=f"warmup-{point['name']}",
+                warmups=0,
+            )
+            subprocess.run(command, check=True)
+            _, total_input_tokens = load_benchmark_result(
+                warmup_file, point, effective_input_len
+            )
+            manifest["warmup"]["points"].append(
+                {
+                    **point,
+                    "effective_input_len": effective_input_len,
+                    "total_input_tokens": total_input_tokens,
+                    "raw_result": str(warmup_file.relative_to(output_dir)),
+                    "raw_sha256": file_sha256(warmup_file),
+                    "command": command,
+                }
+            )
+            atomic_json(output_dir / "manifest.json", manifest)
+        manifest["warmup"]["status"] = "complete"
+        manifest["warmup"]["completed_at"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(output_dir / "manifest.json", manifest)
+
+        for index, point in enumerate(points, start=1):
+            effective_input_len = (
+                point["input_len"] + token_alignment["chat_template_token_overhead"]
+            )
+            print(
+                f"[measure {index}/{len(points)}] {point['name']}: "
                 f"in={point['input_len']} effective_in={effective_input_len} "
                 f"out={point['output_len']} prompts={point['prompts']} "
                 f"concurrency={point['concurrency']}",
                 flush=True,
             )
             raw_file = raw_dir / f"{point['name']}.json"
-            command = [
-                "vllm",
-                "bench",
-                "serve",
-                "--backend",
-                "openai-chat",
-                "--endpoint",
-                "/v1/chat/completions",
-                "--base-url",
-                args.base_url,
-                "--model",
-                args.served_model_name,
-                "--served-model-name",
-                args.served_model_name,
-                "--tokenizer",
-                args.model,
-                "--ignore-eos",
-                "--temperature",
-                str(BENCHMARK_TEMPERATURE),
-                "--dataset-name",
-                "random",
-                "--input-len",
-                str(point["input_len"]),
-                "--output-len",
-                str(point["output_len"]),
-                "--num-prompts",
-                str(point["prompts"]),
-                "--max-concurrency",
-                str(point["concurrency"]),
-                "--num-warmups",
-                str(args.warmups),
-                "--seed",
-                "0",
-                "--disable-tqdm",
-                "--percentile-metrics",
-                "ttft,tpot",
-                "--metric-percentiles",
-                "99",
-                "--save-result",
-                "--result-dir",
-                str(raw_dir),
-                "--result-filename",
-                raw_file.name,
-                "--label",
-                point["name"],
-            ]
+            command = build_benchmark_command(
+                args,
+                point,
+                raw_file,
+                label=point["name"],
+                warmups=args.warmups,
+            )
             subprocess.run(command, check=True)
-            raw_file.with_suffix(".pytorch.json").unlink(missing_ok=True)
-            result = json.loads(raw_file.read_text())
-            completed = int(result.get("completed", 0))
-            failed = int(result.get("failed", 0))
-            if completed != point["prompts"] or failed:
-                raise RuntimeError(
-                    f"{point['name']}: completed={completed}/{point['prompts']}, failed={failed}"
-                )
-            total_input_tokens = result.get("total_input_tokens")
-            if not isinstance(total_input_tokens, int):
-                raise RuntimeError(
-                    f"{point['name']}: vLLM result is missing integer total_input_tokens"
-                )
-            expected_input_tokens = effective_input_len * completed
-            if total_input_tokens != expected_input_tokens:
-                raise RuntimeError(
-                    f"{point['name']}: post-template input length mismatch: "
-                    f"observed={total_input_tokens}, expected={expected_input_tokens} "
-                    f"({effective_input_len} per request)"
-                )
-
+            result, total_input_tokens = load_benchmark_result(
+                raw_file, point, effective_input_len
+            )
             row = {**point, "effective_input_len": effective_input_len}
             for field in BENCHER_MEASURES:
                 if field not in result:
@@ -375,7 +456,8 @@ def main() -> int:
                 row[field] = float(result[field])
             summary.append(row)
             bencher[point["name"]] = {
-                measure: {"value": row[field]} for field, measure in BENCHER_MEASURES.items()
+                measure: {"value": row[field]}
+                for field, measure in BENCHER_MEASURES.items()
             }
             manifest["points"].append(
                 {
@@ -389,6 +471,8 @@ def main() -> int:
             )
             atomic_json(output_dir / "manifest.json", manifest)
     except BaseException as error:
+        if manifest["warmup"]["status"] == "running":
+            manifest["warmup"]["status"] = "failed"
         manifest["status"] = "failed"
         manifest["error"] = repr(error)
         manifest["artifacts"] = artifact_inventory(output_dir)
