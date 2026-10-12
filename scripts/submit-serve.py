@@ -18,7 +18,12 @@ SBATCH_SCRIPT = Path("sbatch/serve.sbatch")
 
 # Build the Slurm command without duplicating scenario allocation policy.
 def build_command(args: argparse.Namespace, nodes: int) -> list[str]:
-    command = ["sbatch", f"--nodes={nodes}", "--export=ALL"]
+    command = [
+        "sbatch",
+        f"--nodes={nodes}",
+        "--export=ALL",
+        "--uenv-passthrough=ignore",
+    ]
     for option in ("account", "partition", "time"):
         value = getattr(args, option)
         if value is not None:

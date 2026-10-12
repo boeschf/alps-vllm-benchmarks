@@ -51,9 +51,9 @@ Install the Hugging Face CLI once:
 uv tool install 'huggingface_hub[cli]'
 ```
 
-Run submission commands from the repository root in a shell without an active uenv. Slurm rejects
-nested `sbatch` calls from an active uenv unless a passthrough policy is supplied; serving uses the
-repository EDF instead of inheriting the submitter's uenv.
+Run submission commands from the repository root. The wrapper always passes
+`--uenv-passthrough=ignore`: an active submitter uenv is never inherited, because serving uses the
+repository EDF.
 
 The native FP8 checkpoint is pinned to revision
 `aca966e4e02791568aa6a4ced368624b3d897f42` and is approximately 704 GiB. Download it to the
