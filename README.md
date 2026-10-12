@@ -310,9 +310,13 @@ Publication metadata comes from the manifest:
 
 - project: `glm-5-3-inference` by default;
 - testbed: `alps-gh200` or `alps-mi300a`;
-- spec: `glm53-<platform>-<nodes>n-<gpus>g-tp<tp>-dp<dp>-ep<ep>-<scenario>`;
+- benchmark variant: `glm53-<platform>-<nodes>n-<gpus>g-tp<tp>-dp<dp>-ep<ep>-<scenario>`;
 - branch and hash: the measured repository state;
 - publishable: true only for a clean worktree.
+
+The publisher prefixes every benchmark name with the variant. It does not pass the variant as
+Bencher's `--spec`: that option selects remote Runner hardware, requires `--image`, and would
+incorrectly rerun rather than upload the measurements produced on Alps.
 
 Known generated paths and root-level Linux core dumps are excluded from source identity. Other
 untracked files remain fingerprinted and make the run non-publishable because they may affect the

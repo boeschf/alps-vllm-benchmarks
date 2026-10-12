@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Upload an existing result to Bencher. The run context (project, testbed, spec, hash,
-# branch) comes from the run's own manifest.json, so the upload is tied to what was
-# actually measured instead of operator-typed values. BENCHER_API_KEY (and optionally
-# BENCHER_HOST) must be provided by the operator; secrets never enter the repository.
+# Upload an existing result to Bencher. The run context (project, testbed, benchmark
+# variant, hash, branch) comes from the run's own manifest.json, so the upload is tied
+# to what was actually measured instead of operator-typed values. BENCHER_API_KEY (and
+# optionally BENCHER_HOST) must be provided by the operator; secrets never enter the
+# repository.
 #
 #   BENCHER_API_KEY=... scripts/publish-bencher.sh results/<run>/
 #
@@ -69,14 +70,22 @@ PUBLISHABLE="$(read_manifest '.publication.publishable')"
 [[ -n "${SPEC}" && "${SPEC}" != "null" ]] || { echo "manifest has no Bencher spec" >&2; exit 1; }
 [[ -n "${BRANCH}" && "${BRANCH}" != "null" ]] || { echo "manifest has no Bencher branch" >&2; exit 1; }
 
+# The manifest's "spec" is this benchmark's topology/scenario identity, not a
+# Bencher remote Runner hardware spec. Prefix benchmark names with it so variants
+# remain distinct on the same physical testbed without enabling remote execution.
+PUBLISH_JSON="$(mktemp)"
+trap 'rm -f "${PUBLISH_JSON}"' EXIT
+jq --arg variant "${SPEC}" \
+  'with_entries(.key = ($variant + "/" + .key))' \
+  "${BENCHER_JSON}" >"${PUBLISH_JSON}"
+
 ARGS=(
   run
   --project "${PROJECT}"
   --branch "${BRANCH}"
   --testbed "${TESTBED}"
-  --spec "${SPEC}"
   --adapter json
-  --file "${BENCHER_JSON}"
+  --file "${PUBLISH_JSON}"
 )
 
 if [[ "${PUBLISHABLE}" == "true" ]]; then
@@ -93,5 +102,5 @@ else
 fi
 
 echo "publishing ${RUN_DIR}"
-echo "  project=${PROJECT} testbed=${TESTBED} spec=${SPEC} branch=${BRANCH}"
-exec "${BENCHER_BIN}" "${ARGS[@]}"
+echo "  project=${PROJECT} testbed=${TESTBED} variant=${SPEC} branch=${BRANCH}"
+"${BENCHER_BIN}" "${ARGS[@]}"
