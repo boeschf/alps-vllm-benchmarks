@@ -1,0 +1,4 @@
+name	scenario	input_len	output_len	prompts	warmup_prompts	concurrency
+context-32k	long-context	32768	128	128	16	8
+context-128k	long-context	131072	128	128	16	8
+context-256k	long-context	262144	128	128	16	8

@@ -48,6 +48,20 @@ class BenchmarkStatisticsTests(unittest.TestCase):
             self.assertEqual(warmup["prompts"], expected)
             self.assertEqual(warmup["measurement_prompts"], point["prompts"])
 
+    def test_long_context_suite_targets_production_capacity(self) -> None:
+        points = load_suite(ROOT / "benchmarks" / "long-context.tsv")
+
+        self.assertEqual(
+            [point["input_len"] for point in points],
+            [32768, 131072, 262144],
+        )
+        self.assertTrue(
+            all(
+                point["input_len"] + point["output_len"] < 524288
+                for point in points
+            )
+        )
+
     def test_warmup_must_reach_requested_concurrency(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             suite = Path(temporary) / "suite.tsv"

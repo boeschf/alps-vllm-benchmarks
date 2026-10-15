@@ -39,7 +39,7 @@
     "chat-template-content-format": "openai",
     "enable-auto-tool-choice": true,
     "tool-call-parser": "glm47",
-    "reasoning-parser": "glm45",
+    "reasoning-parser": "glm47",
     "enable-prompt-tokens-details": false,
     "enable-log-requests": false,
     "disable-uvicorn-access-log": true,

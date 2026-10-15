@@ -1,0 +1,30 @@
+{
+  "id": "million-context",
+  "description": "Experimental four-node TP=4 reproducer for the currently unsupported one-million-token UCCL target.",
+  "constraints": {
+    "exact_nodes": 4,
+    "platforms": ["cuda"]
+  },
+  "topology": {
+    "tensor_parallel_size": 4
+  },
+  "server": {
+    "max-model-len": 1048576,
+    "gpu-memory-utilization": 0.95,
+    "kv-cache-dtype": "fp8",
+    "max-num-seqs": 1,
+    "max-num-batched-tokens": 1024,
+    "enable-chunked-prefill": true,
+    "enforce-eager": true,
+    "kv-offloading-size": 40,
+    "kv-offloading-backend": "native"
+  },
+  "environment": {
+    "SMOKE_INPUT_TOKENS": "1000000",
+    "SMOKE_MAX_TOKENS": "16"
+  },
+  "features": {
+    "kv_cpu_offload": "native-40gb",
+    "million_token_context": true
+  }
+}

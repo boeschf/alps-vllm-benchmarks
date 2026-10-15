@@ -33,7 +33,7 @@ digest detects registry-side tag movement.
 | `scripts/submit-serve.py` | Scenario-aware Slurm submission entrypoint |
 | `sbatch/serve.sbatch` | Multi-node serving and benchmark workload |
 | `sbatch/download.sbatch` | Resumable model download job |
-| `benchmarks/standard.tsv` | Standard 11-point benchmark suite |
+| `benchmarks/` | Standard short-context and production-parity long-context suites |
 | `results/` | Versionable benchmark records |
 | `logs/` | Ignored Slurm, server, smoke, and cache logs |
 | `tools/install-bencher.sh` | Pinned repository-local Bencher CLI installer |
@@ -104,7 +104,13 @@ resolver then validates platform and topology constraints and emits the exact vL
 | `dual-batch-overlap` | Dual batch overlap | Overlaps communication and computation |
 | `async-scheduling` | Async scheduling | Overlaps CPU scheduling and accelerator execution |
 | `disaggregated-pd` | Mooncake prefill/decode split | Four prefill plus four decode nodes; CUDA only; not composable |
-| `production` | Production K8s parity settings | Exactly eight CUDA nodes, TP=4, MTP, EPLB, and MooncakeStore |
+| `production` | External production vLLM parity | Exactly four CUDA nodes, TP=4/DCP=4, 1M context, FP8 KV cache, 32 sequences, 4096-token scheduler cap, and one MTP token |
+| `million-context` | Experimental vLLM 0.30 capacity reproducer | Exactly four CUDA nodes, TP=4, FP8 KV cache, native CPU KV offload; currently fails startup without DCP |
+
+`production` tracks the active vLLM parameters in `glm-5-3-fp8_tp_dp.yaml`: FlashMLA sparse
+attention, DCP=4 with `ag_rs`, custom all-reduce enabled, MTP=1, and EPLB and Mooncake disabled.
+The benchmark image, Slurm runtime, network environment, and resource settings remain owned by
+this repository's platform configuration rather than the Kubernetes deployment.
 
 The resolver rejects the incompatibilities it explicitly encodes; ordered overlays otherwise use
 normal last-component-wins deep-merge semantics. On ROCm, `uccl-ll` uses 0.70 GPU memory
@@ -113,12 +119,27 @@ chose FlashInfer CUTLASS and stalled distributed engine initialization; the work
 DeepGEMM with `DeepEPHTPrepareAndFinalize`. ROCm retains its platform-native MoE selection. Use
 `moe-deep-gemm` or `uccl-ll+moe-deep-gemm` to pin DeepGEMM in other CUDA runs.
 
-`uccl-ll` caps `max-num-batched-tokens` at 1024 because DeepEP sizes its low-latency RDMA
-workspace from that capacity; the common 2048-token cap requested an 8 GiB allocation during
-startup profiling and exhausted GH200 memory. The lower cap reduces that workspace while retaining
-chunked prefill. On CUDA, it also raises `gpu-memory-utilization` from 0.88 to 0.90: after CUDA
-graph capture, 0.88 left only 2.35 GiB for KV cache, below the 2.83 GiB required to preserve the
-32,768-token model limit.
+`uccl-ll` retains `max-num-batched-tokens=1024`. Job 5037516 tested 2048 with CUDA GPU
+memory utilization 0.90 and still exhausted GPU memory during startup. DeepEP sizes its
+low-latency RDMA workspace from this capacity, so raising the scheduler cap consumes memory before
+the server can allocate its required KV cache. The one-million-token profile also uses the proven
+1024-token cap.
+
+`uccl-ll+million-context` records the attempted native 1,048,576-token target on four GH200 nodes;
+it is a failure reproducer, not a supported serving profile. Job 5037564 measured only
+15.86 GiB/GPU available for KV cache without offload, versus 52.68 GiB required, and estimated a
+315,776-token ceiling. Job 5037589 tried 42 GiB/GPU of UVA weight offload, reached
+405,443,520 KiB (about 387 GiB) step RSS while loading, and was OOM-killed. Job 5037650 accepted
+a 40 GiB native CPU KV-offload configuration but applied the same local-KV startup check:
+15.85--15.87 GiB available and an
+estimated 315,392--315,904-token ceiling. Native KV offload therefore did not extend the maximum
+single active request on this vLLM/model path.
+
+The existing `mooncake-cpu` component is complementary, not a demonstrated solution to this
+limit. Its `MooncakeStoreConnector` externalizes reusable prefix blocks and currently has
+`enable_offload=false`; it does not satisfy the observed startup requirement that one active
+`max-model-len` request fit local KV capacity. Do not combine it with the reproducer until active
+single-request paging is supported and verified.
 
 Evidence from the predecessor investigation found the high-throughput backend unsuitable for
 decode, but `uccl-ht` remains available as a prefill-heavy experiment on either platform.
@@ -145,6 +166,7 @@ Examples:
 ```bash
 ./scripts/submit-serve.py --scenario uccl-ll
 ./scripts/submit-serve.py --scenario uccl-ll+eplb --nodes 8
+./scripts/submit-serve.py --scenario uccl-ll+million-context --smoke-only --time 04:00:00
 ./scripts/submit-serve.py --scenario production
 ./scripts/submit-serve.py --scenario disaggregated-pd
 ./scripts/submit-serve.py --platform rocm
@@ -201,6 +223,21 @@ The standard suite contains 11 points:
 - concurrency scaling at 1024 input and 128 output tokens;
 - prefill scaling at concurrency 8 with 1K, 4K, and 16K input tokens;
 - decode scaling at concurrency 8 with 128, 512, and 1024 output tokens.
+
+The long-context suite preserves the standard suite for historical comparison and separately tests
+32K, 128K, and 256K input contexts with 128 output tokens at concurrency 8. Run it against the
+four-node TP=4/DCP=4 production-parity scenario, whose 1,048,576-token context limit,
+32-sequence scheduler, and 4096-token batch cap match the external deployment's active vLLM
+parameters:
+
+```bash
+./scripts/submit-serve.py --scenario production \
+  --benchmark-suite benchmarks/long-context.tsv --time 08:00:00
+```
+
+Long-context points retain 128 requests and three repetitions so their p99 values have the same
+meaning as the standard suite; the explicit eight-hour allocation accounts for that measurement
+volume.
 
 Every point uses deterministic greedy sampling (`temperature=0`) with random prompt generation seeded
 to zero. Each measured repetition contains at least 128 requests (256 at concurrency 64), so every

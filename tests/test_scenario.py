@@ -29,6 +29,7 @@ class ScenarioAllocationTests(unittest.TestCase):
         )
         self.assertEqual(resolved["server"]["kv-cache-dtype"], "bfloat16")
         self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.88)
+        self.assertEqual(resolved["server"]["reasoning-parser"], "glm47")
 
     def test_rocm_uses_explicit_mi300a_numa_binding(self) -> None:
         resolved = resolve_scenario("baseline", "rocm")
@@ -104,7 +105,7 @@ class ScenarioAllocationTests(unittest.TestCase):
             resolve_scenario("production", "cuda")["server"][
                 "gpu-memory-utilization"
             ],
-            0.87,
+            0.85,
         )
         self.assertEqual(
             resolve_scenario("uccl-ll", "cuda")["server"][
@@ -119,7 +120,7 @@ class ScenarioAllocationTests(unittest.TestCase):
             0.7,
         )
 
-    def test_uccl_ll_bounds_low_latency_rdma_capacity(self) -> None:
+    def test_uccl_ll_keeps_1k_rdma_capacity_after_2k_oom(self) -> None:
         baseline = resolve_scenario("baseline", "cuda")
         resolved = resolve_scenario("uccl-ll", "cuda")
         composed = resolve_scenario("uccl-ll+moe-deep-gemm", "cuda")
@@ -129,6 +130,36 @@ class ScenarioAllocationTests(unittest.TestCase):
         self.assertEqual(composed["server"]["max-num-batched-tokens"], 1024)
         self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.9)
         self.assertEqual(composed["server"]["gpu-memory-utilization"], 0.9)
+
+    def test_million_context_profile_uses_tp4_and_fp8_kv_cache(self) -> None:
+        resolved = resolve_scenario("uccl-ll+million-context", "cuda")
+
+        self.assertEqual(select_nodes(resolved), 4)
+        self.assertEqual(resolved["topology"]["tensor_parallel_size"], 4)
+        self.assertEqual(resolved["server"]["max-model-len"], 1048576)
+        self.assertEqual(resolved["server"]["kv-cache-dtype"], "fp8")
+        self.assertEqual(resolved["server"]["max-num-seqs"], 1)
+        self.assertEqual(resolved["server"]["max-num-batched-tokens"], 1024)
+        self.assertEqual(resolved["server"]["gpu-memory-utilization"], 0.95)
+        self.assertTrue(resolved["server"]["enforce-eager"])
+        self.assertEqual(resolved["server"]["kv-offloading-size"], 40)
+        self.assertEqual(
+            resolved["server"]["kv-offloading-backend"],
+            "native",
+        )
+        self.assertEqual(resolved["features"]["kv_cpu_offload"], "native-40gb")
+        self.assertFalse(resolved["features"]["weight_cpu_offload"])
+        self.assertEqual(
+            resolved["server"]["all2all-backend"],
+            "deepep_low_latency",
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires exactly 4 nodes"):
+            select_nodes(resolved, 8)
+
+    def test_million_context_profile_is_cuda_only(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not support platform rocm"):
+            resolve_scenario("million-context", "rocm")
 
     def test_uccl_ht_uses_cuda_deep_gemm_workaround(self) -> None:
         baseline = resolve_scenario("baseline", "cuda")
@@ -193,10 +224,28 @@ class ScenarioAllocationTests(unittest.TestCase):
 
     def test_production_requires_exact_allocation(self) -> None:
         resolved = resolve_scenario("production", "cuda")
+        server = resolved["server"]
 
-        self.assertEqual(select_nodes(resolved), 8)
-        with self.assertRaisesRegex(ValueError, "requires exactly 8 nodes"):
-            select_nodes(resolved, 4)
+        self.assertEqual(select_nodes(resolved), 4)
+        with self.assertRaisesRegex(ValueError, "requires exactly 4 nodes"):
+            select_nodes(resolved, 8)
+        self.assertEqual(resolved["topology"]["tensor_parallel_size"], 4)
+        self.assertEqual(server["max-model-len"], 1048576)
+        self.assertEqual(server["gpu-memory-utilization"], 0.85)
+        self.assertEqual(server["kv-cache-dtype"], "fp8")
+        self.assertEqual(server["max-num-seqs"], 32)
+        self.assertEqual(server["max-num-batched-tokens"], 4096)
+        self.assertEqual(server["attention-backend"], "FLASHMLA_SPARSE")
+        self.assertEqual(server["decode-context-parallel-size"], 4)
+        self.assertEqual(server["dcp-comm-backend"], "ag_rs")
+        self.assertFalse(server["disable-custom-all-reduce"])
+        self.assertFalse(server["enable-eplb"])
+        self.assertEqual(
+            server["speculative-config"],
+            {"method": "mtp", "num_speculative_tokens": 1},
+        )
+        self.assertNotIn("kv-transfer-config", server)
+        self.assertEqual(resolved["services"], {})
 
     def test_disaggregated_allocation_comes_from_deployment_roles(self) -> None:
         resolved = resolve_scenario("disaggregated-pd", "cuda")

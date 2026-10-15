@@ -1,0 +1,77 @@
+{
+  "id": "production",
+  "description": "Production-parity vLLM settings on an equivalent four-node Slurm topology.",
+  "constraints": {
+    "exact_nodes": 4,
+    "platforms": ["cuda"]
+  },
+  "topology": {
+    "tensor_parallel_size": 4
+  },
+  "server": {
+    "max-model-len": 1048576,
+    "gpu-memory-utilization": 0.85,
+    "max-num-seqs": 32,
+    "kv-cache-dtype": "fp8",
+    "max-num-batched-tokens": 4096,
+    "enable-chunked-prefill": true,
+    "enable-prefix-caching": true,
+    "enable-prompt-tokens-details": true,
+    "trust-remote-code": true,
+    "disable-custom-all-reduce": false,
+    "decode-context-parallel-size": 4,
+    "compilation-config": {
+      "fast_moe_cold_start": false,
+      "pass_config": {
+        "fuse_allreduce_rms": false
+      }
+    },
+    "enable-eplb": true,
+    "eplb-config": {
+      "window_size": 1000,
+      "step_interval": 3000,
+      "num_redundant_experts": 32,
+      "log_balancedness": true,
+      "log_balancedness_interval": 100,
+      "communicator": "torch_gloo"
+    },
+    "speculative-config": {
+      "method": "mtp",
+      "num_speculative_tokens": 3
+    },
+    "model-loader-extra-config": {
+      "concurrency": 64
+    },
+    "kv-transfer-config": {
+      "kv_connector": "MooncakeStoreConnector",
+      "kv_role": "kv_both",
+      "kv_load_failure_policy": "recompute",
+      "kv_connector_extra_config": {
+        "cache_prefix": "glm-5-3-fp8",
+        "load_async": true,
+        "lookup_async": true
+      }
+    }
+  },
+  "features": {
+    "eplb": true,
+    "speculative_decoding": "mtp-3",
+    "external_kv_transfer": true,
+    "kv_cpu_offload": "mooncake_store"
+    "decode_context_parallelism": 4,
+  },
+  "services": {
+    "mooncake_store": {
+      "enabled": true,
+      "master_port": 50051,
+      "mode": "embedded",
+      "metadata_server": "P2PHANDSHAKE",
+      "global_segment_size": "40GB",
+      "local_buffer_size": "5GB",
+      "protocol": "rdma",
+      "device_name": "",
+      "enable_offload": false,
+      "tenant_id": "glm-5-3-production-parity"
+    }
+  }
+}

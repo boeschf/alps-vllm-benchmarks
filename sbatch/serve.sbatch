@@ -256,11 +256,17 @@ else
 fi
 
 status "server ready; url=${BASE_URL}"
-status "smoke request starting"
-"${PY[@]}" "${ROOT}/scripts/smoke-request.py" \
-  --base-url "${BASE_URL}" \
-  --model "${SERVED_MODEL_NAME:?scenario did not define served-model-name}" \
+SMOKE_ARGS=(
+  --base-url "${BASE_URL}"
+  --model "${SERVED_MODEL_NAME:?scenario did not define served-model-name}"
   --output "${LOGDIR}/completion.json"
+)
+if [[ -n "${SMOKE_INPUT_TOKENS:-}" ]]; then
+  SMOKE_ARGS+=(--input-tokens "${SMOKE_INPUT_TOKENS}")
+  SMOKE_ARGS+=(--max-tokens "${SMOKE_MAX_TOKENS:-16}")
+fi
+status "smoke request starting"
+"${PY[@]}" "${ROOT}/scripts/smoke-request.py" "${SMOKE_ARGS[@]}"
 status "smoke request complete; output=${LOGDIR}/completion.json"
 if [[ "${JIT_CACHE_MODE}" == "readwrite" && -z "${BENCHMARK_SUITE:-}" ]]; then
   # Benchmark jobs publish after their full-suite warmup. Jobs without a suite
