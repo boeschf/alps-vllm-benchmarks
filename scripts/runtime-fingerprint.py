@@ -38,6 +38,7 @@ RUNTIME_ENVIRONMENT_NAMES = frozenset(
         "MAX_JOBS",
         "OMP_NUM_THREADS",
         "PLATFORM",
+        "RUNTIME_BACKEND",
         "PMIX_MCA_psec",
         "SCENARIO_ID",
         "TORCHINDUCTOR_CACHE_DIR",
@@ -48,6 +49,9 @@ RUNTIME_ENVIRONMENT_NAMES = frozenset(
         "TRTLLM_DG_CACHE_DIR",
         "VLLM_CACHE_ROOT",
         "XDG_CACHE_HOME",
+        "UENV_DIGEST",
+        "UENV_REF",
+        "UENV_VIEW",
     }
 )
 

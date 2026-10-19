@@ -5,23 +5,26 @@ Reproducible vLLM serving and benchmarking for `zai-org/GLM-5.3` on Alps:
 - NVIDIA GH200 over Slingshot/CXI;
 - AMD MI300A over Slingshot/CXI.
 
-The repository consumes the vLLM 0.30 images produced by
-[`eth-cscs/alps-extended-images#63`](https://github.com/eth-cscs/alps-extended-images/pull/63).
-It does not rebuild or patch those images. Optional UCCL-EP, Mooncake, and offload components are
-present in the images but are enabled only by explicit scenarios.
+Container images are selected by the accelerator platform profiles. CUDA jobs can instead use an
+installed uenv as their software stack; the serving scenarios and vLLM configuration are unchanged.
+Optional UCCL-EP, Mooncake, and offload components are enabled only by explicit scenarios.
 
-## Images
+## Software stacks
 
-| Platform | Profile | Model loader |
+| Platform | Default stack | Model loader |
 |---|---|---|
-| GH200 | [`config/platforms/cuda.env`](config/platforms/cuda.env) | Run:ai Model Streamer |
-| MI300A | [`config/platforms/rocm.env`](config/platforms/rocm.env) | Standard vLLM loader |
+| GH200 | OCI image from [`config/platforms/cuda.env`](config/platforms/cuda.env) | Run:ai Model Streamer |
+| MI300A | OCI image from [`config/platforms/rocm.env`](config/platforms/rocm.env) | Standard vLLM loader |
+| GH200 uenv | Explicit `--uenv` reference and `--view` | Platform-profile loader |
 
-`IMAGE_REF` in each platform profile selects the current image tag. At job startup the launcher
-resolves that tag through the registry and records its immutable `IMAGE_DIGEST`; failure to resolve
-the digest fails the job before serving. Each EDF expands `IMAGE_REF` and otherwise contains only
-runtime settings. Changing an image tag remains an explicit repository change, while the resolved
-digest detects registry-side tag movement.
+For containers, job startup resolves `IMAGE_REF` through the registry and records its immutable OCI
+digest. For uenvs, startup resolves the supplied reference through the local uenv repository and
+records its immutable SquashFS digest. Resolution failures stop the job before serving.
+
+The EDF remains the authoritative source for runtime environment variables. The launcher exports
+its `[env]` table to every `srun` step. Container steps additionally receive the EDF through
+`--environment`; uenv steps receive `--uenv` and `--view` instead. Model files use the EDF bind
+mount in containers and their shared host path in uenvs.
 
 ## Repository layout
 
@@ -29,8 +32,8 @@ digest detects registry-side tag movement.
 |---|---|
 | `config/platforms/` | Image, EDF, loader, NUMA, and runtime defaults for each accelerator platform |
 | `config/scenarios/` | Declarative, composable serving scenarios |
-| `edf/` | Container-engine runtime definitions |
-| `scripts/submit-serve.py` | Scenario-aware Slurm submission entrypoint |
+| `edf/` | Container definitions and authoritative per-platform runtime environment |
+| `scripts/submit-serve.py` | Scenario- and software-stack-aware Slurm submission entrypoint |
 | `sbatch/serve.sbatch` | Multi-node serving and benchmark workload |
 | `sbatch/download.sbatch` | Resumable model download job |
 | `benchmarks/` | Standard short-context and production-parity long-context suites |
@@ -172,6 +175,21 @@ Examples:
 ./scripts/submit-serve.py --platform rocm
 ```
 
+To use the installed vLLM 0.31 uenv on GH200 instead of the CUDA container:
+
+```bash
+./scripts/submit-serve.py \
+  --scenario baseline \
+  --platform cuda \
+  --uenv 'vllm/0.31:rc1@daint%gh200' \
+  --view vllm \
+  --smoke-only
+```
+
+`--view` defaults to `vllm` when `--uenv` is supplied. The wrapper continues to pass
+`--uenv-passthrough=ignore` to `sbatch`, so an unrelated uenv active in the submitting shell cannot
+leak into the allocation.
+
 Common Slurm overrides are explicit wrapper options:
 
 ```bash
@@ -188,7 +206,8 @@ EP = DP x TP = 16
 ```
 
 Distributed serving steps use `--distribution=block:cyclic` and leave Slurm CPU binding disabled;
-vLLM binds accelerator workers to their local NUMA resources.
+vLLM binds accelerator workers to their local NUMA resources. Container runs use
+`--environment=<edf>`; uenv runs use `--uenv=<reference> --view=<view>`.
 The default single service uses all allocated nodes; its OpenAI-compatible endpoint is served on
 port 8000 of the first allocated node. After readiness, the job performs one real chat completion.
 Without a benchmark suite or `--smoke-only`, the server remains active until the job is cancelled.
@@ -322,22 +341,24 @@ caches without changing inference correctness.
 
 ## Benchmark provenance and Bencher
 
-`manifest.json` schema 2 records the repository state, the exact Slurm spool script, model identity,
-image tag and resolved OCI manifest digest, EDF, resolved scenario, topology, per-node runtime
-identities, complete executed server and benchmark commands, cache status, and result hashes.
+`manifest.json` schema 2 records the repository state, selected runtime backend, software-stack
+reference and immutable digest, the exact Slurm spool script, model identity, EDF environment
+source, resolved scenario, topology, per-node runtime identities, complete executed server and
+benchmark commands, cache status, and result hashes.
 
 Benchmark initialization also creates `reproduction/` in the result directory. Its `vllm/`
 subdirectory contains byte-for-byte copies of every role/node YAML, `environment.json` contains
 the allowlisted environment captured for each process, and `bundle.json` records their checksums.
-The allowlist includes every EDF runtime setting, the image tag and digest, and scenario-declared
-variables; unrelated process environment is excluded. These artifacts are created before warmup
-and remain available when a later benchmark phase fails.
+The allowlist includes every EDF runtime setting, software-stack identity, uenv selection when
+applicable, and scenario-declared variables; unrelated process environment is excluded. These
+artifacts are created before warmup and remain available when a later benchmark phase fails.
 
 Two fingerprints separate experiment identity from record integrity:
 
 - `experiment_fingerprint` covers relevant tracked and untracked source files, the executed Slurm
-  batch-script checksum, model metadata and shard inventory, image, EDF, scenario, topology, stable
-  runtime identity, the reproduction bundle's normalized identity, and suite definition;
+  batch-script checksum, model metadata and shard inventory, software stack, EDF environment
+  source, scenario, topology, stable runtime identity, the reproduction bundle's normalized
+  identity, and suite definition;
 - `record_fingerprint` additionally covers the completed output artifacts, including the archived
   batch script and exact reproduction bundle.
 

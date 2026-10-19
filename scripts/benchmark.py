@@ -519,6 +519,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=ROOT / "results")
     parser.add_argument("--run-id")
     parser.add_argument("--platform", required=True, choices=("cuda", "rocm"))
+    parser.add_argument(
+        "--runtime-backend",
+        required=True,
+        choices=("container", "uenv"),
+    )
     parser.add_argument("--image-ref", required=True)
     parser.add_argument("--image-digest", required=True)
     parser.add_argument("--scenario-config", type=Path, required=True)
@@ -625,6 +630,7 @@ def main() -> int:
             "slurm_batch_script_sha256": batch_script_identity["sha256"],
         },
         "model": model_for_fingerprint,
+        "runtime_backend": args.runtime_backend,
         "image_ref": args.image_ref,
         "image_digest": args.image_digest,
         "platform": args.platform,
@@ -668,9 +674,14 @@ def main() -> int:
         "model": model,
         "served_model_name": args.served_model_name,
         "platform": args.platform,
+        "runtime_backend": args.runtime_backend,
         "image_ref": args.image_ref,
         "image_digest": args.image_digest,
-        "image_source": "https://github.com/eth-cscs/alps-extended-images/pull/63",
+        "image_source": (
+            "uenv image repository"
+            if args.runtime_backend == "uenv"
+            else "https://github.com/eth-cscs/alps-extended-images/pull/63"
+        ),
         "edf": {"path": str(edf_path), "sha256": file_sha256(edf_path)},
         "scenario": scenario,
         "suite": suite_identity,

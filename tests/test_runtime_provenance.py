@@ -28,6 +28,20 @@ assert RESOLVER_SPEC and RESOLVER_SPEC.loader
 resolve_image_digest = importlib.util.module_from_spec(RESOLVER_SPEC)
 RESOLVER_SPEC.loader.exec_module(resolve_image_digest)
 
+EDF_ENV_SPEC = importlib.util.spec_from_file_location(
+    "edf_environment", ROOT / "scripts" / "edf-environment.py"
+)
+assert EDF_ENV_SPEC and EDF_ENV_SPEC.loader
+edf_environment = importlib.util.module_from_spec(EDF_ENV_SPEC)
+EDF_ENV_SPEC.loader.exec_module(edf_environment)
+
+UENV_RESOLVER_SPEC = importlib.util.spec_from_file_location(
+    "resolve_uenv_digest", ROOT / "scripts" / "resolve-uenv-digest.py"
+)
+assert UENV_RESOLVER_SPEC and UENV_RESOLVER_SPEC.loader
+resolve_uenv_digest = importlib.util.module_from_spec(UENV_RESOLVER_SPEC)
+UENV_RESOLVER_SPEC.loader.exec_module(resolve_uenv_digest)
+
 
 class RuntimeEnvironmentTests(unittest.TestCase):
     def test_edf_environment_is_allowlisted_without_capturing_unrelated_values(self) -> None:
@@ -56,6 +70,17 @@ class RuntimeEnvironmentTests(unittest.TestCase):
                     "TRITON_CACHE_DIR": "/tmp/triton-cache",
                 },
             )
+
+    def test_edf_environment_can_be_exported_for_uenv_steps(self) -> None:
+        environment = edf_environment.load_edf_environment(
+            ROOT / "edf" / "vllm-cuda.toml"
+        )
+
+        self.assertEqual(environment["PMIX_MCA_psec"], "native")
+        self.assertEqual(environment["MAX_JOBS"], "8")
+        exports = edf_environment.shell_exports(environment)
+        self.assertIn("export EDF_ENV_NAMES=", exports)
+        self.assertIn("export TRITON_CACHE_DIR=/tmp/triton-cache", exports)
 
 
 class Response:
@@ -121,6 +146,49 @@ class ImageDigestTests(unittest.TestCase):
     def test_reference_requires_explicit_tag_or_digest(self) -> None:
         with self.assertRaisesRegex(ValueError, "explicit tag or digest"):
             resolve_image_digest.split_reference("registry.example/repository/image")
+
+
+class UenvDigestTests(unittest.TestCase):
+    def test_resolves_one_installed_uenv_to_immutable_digest(self) -> None:
+        digest = "a" * 64
+        commands = []
+
+        def runner(command, **kwargs):
+            commands.append((command, kwargs))
+            return type(
+                "Result",
+                (),
+                {"stdout": json.dumps({"records": [{"digest": digest}]})},
+            )()
+
+        reference = "vllm/0.31:rc1@daint%gh200"
+        self.assertEqual(
+            resolve_uenv_digest.resolve_uenv_digest(reference, runner),
+            digest,
+        )
+        self.assertEqual(
+            commands[0][0],
+            [
+                "uenv",
+                "image",
+                "ls",
+                "--no-partials",
+                "--json",
+                reference,
+            ],
+        )
+        self.assertTrue(commands[0][1]["check"])
+
+    def test_rejects_ambiguous_uenv_reference(self) -> None:
+        def runner(*args, **kwargs):
+            return type(
+                "Result",
+                (),
+                {"stdout": json.dumps({"records": [{}, {}]})},
+            )()
+
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            resolve_uenv_digest.resolve_uenv_digest("vllm", runner)
 
 
 if __name__ == "__main__":

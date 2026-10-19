@@ -45,6 +45,21 @@ class SubmissionCommandTests(unittest.TestCase):
             ],
         )
 
+    def test_uenv_runtime_is_exported_with_default_view(self) -> None:
+        args = submit_serve.parse_args(["--uenv", "vllm/0.31:rc1@daint%gh200"])
+
+        environment = submit_serve.build_environment(args, 4)
+
+        self.assertEqual(environment["RUNTIME_BACKEND"], "uenv")
+        self.assertEqual(
+            environment["STACK_UENV_REF"], "vllm/0.31:rc1@daint%gh200"
+        )
+        self.assertEqual(environment["STACK_UENV_VIEW"], "vllm")
+
+    def test_view_requires_uenv(self) -> None:
+        with self.assertRaises(SystemExit):
+            submit_serve.parse_args(["--view", "vllm"])
+
 
 if __name__ == "__main__":
     unittest.main()

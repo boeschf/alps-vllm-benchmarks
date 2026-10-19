@@ -40,8 +40,15 @@ def build_environment(args: argparse.Namespace, nodes: int) -> dict[str, str]:
             "SCENARIO": args.scenario,
             "PLATFORM": args.platform,
             "EXPECTED_NODES": str(nodes),
+            "RUNTIME_BACKEND": "uenv" if args.uenv else "container",
         }
     )
+    if args.uenv:
+        environment["STACK_UENV_REF"] = args.uenv
+        environment["STACK_UENV_VIEW"] = args.view
+    else:
+        environment.pop("STACK_UENV_REF", None)
+        environment.pop("STACK_UENV_VIEW", None)
     if args.model is not None:
         environment["MODEL"] = args.model
     if args.benchmark_suite is not None:
@@ -71,6 +78,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model")
     parser.add_argument("--benchmark-suite")
     parser.add_argument(
+        "--uenv",
+        help="run srun steps in this concrete uenv instead of the platform EDF",
+    )
+    parser.add_argument(
+        "--view",
+        help="uenv view to load (default: vllm when --uenv is supplied)",
+    )
+    parser.add_argument(
         "--jit-cache-mode",
         choices=("off", "read", "readwrite"),
         help="persistent JIT cache behavior (default: readwrite)",
@@ -80,7 +95,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="exit after readiness, smoke validation, and cache publication",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.view and not args.uenv:
+        parser.error("--view requires --uenv")
+    if args.uenv and not args.view:
+        args.view = "vllm"
+    return args
 
 
 # Resolve the allocation before asking Slurm to create the job.

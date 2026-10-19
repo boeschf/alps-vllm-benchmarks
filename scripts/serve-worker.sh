@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Per-node worker inside the container. The scenario resolver writes one complete
-# vLLM YAML for each role-local node. This script selects that file, captures the
-# runtime fingerprint, and launches it without appending vLLM configuration flags.
+# Per-node worker inside the selected software-stack runtime. The scenario resolver writes one
+# complete vLLM YAML for each role-local node. This script selects that file, captures the runtime
+# fingerprint, and launches it without appending vLLM configuration flags.
 set -euo pipefail
 
 : "${MODEL:?MODEL must be an absolute checkpoint path}"
@@ -14,10 +14,9 @@ set -euo pipefail
 # shellcheck source=/dev/null
 source "${SCENARIO_ENV}"
 
-# The EDF bind-mounts the selected host checkpoint read-only at MODEL. A node
-# whose mount is missing (observed once as a transient NFS/pyxis failure) must
-# fail loudly here instead of sending vLLM into an offline HF hub lookup that
-# produces a confusing LocalEntryNotFoundError. Retry briefly because the NFS
+# Container jobs see the checkpoint through the EDF bind mount; uenv jobs use its host path
+# directly. A missing checkpoint must fail loudly here instead of sending vLLM into an offline HF
+# hub lookup that produces a confusing LocalEntryNotFoundError. Retry briefly because the NFS
 # source can take a moment to appear.
 for _ in {1..30}; do
   [[ -f "${MODEL}/config.json" ]] && break

@@ -54,26 +54,56 @@ PROFILE="${ROOT}/config/platforms/${PLATFORM}.env"
 [[ -f "${PROFILE}" ]] || { echo "unsupported PLATFORM=${PLATFORM}" >&2; exit 2; }
 # shellcheck source=/dev/null
 source "${PROFILE}"
-IMAGE_DIGEST="$("${PY[@]}" "${ROOT}/scripts/resolve-image-digest.py" "${IMAGE_REF}")"
+
+RUNTIME_BACKEND="${RUNTIME_BACKEND:-container}"
+# Slurm's --uenv-passthrough=ignore strips reserved UENV_* variables from the submission
+# environment, so the wrapper transports the selection under STACK_UENV_* names.
+UENV_REF="${STACK_UENV_REF:-}"
+UENV_VIEW="${STACK_UENV_VIEW:-}"
+UENV_DIGEST=""
 
 MODEL_SOURCE="${MODEL:-${ROOT}/models/GLM-5.3}"
 [[ -d "${MODEL_SOURCE}" ]] || { echo "model directory is missing: ${MODEL_SOURCE}" >&2; exit 2; }
 MODEL_SOURCE="$(realpath "${MODEL_SOURCE}")"
-MODEL_CONTAINER="${MODEL_CONTAINER:-/models/GLM-5.3}"
-[[ "${MODEL_CONTAINER}" = /* && "${MODEL_CONTAINER}" != "/" ]] || {
-  echo "MODEL_CONTAINER must be an absolute non-root path: ${MODEL_CONTAINER}" >&2
-  exit 2
-}
 case "${MODEL_SOURCE}" in
   *[,:]*) echo "MODEL cannot contain ':' or ',': ${MODEL_SOURCE}" >&2; exit 2 ;;
 esac
-case "${MODEL_CONTAINER}" in
-  *[,:]*) echo "MODEL_CONTAINER cannot contain ':' or ',': ${MODEL_CONTAINER}" >&2; exit 2 ;;
-esac
-MODEL="${MODEL_CONTAINER}"
 
 EDF="${EDF:-${ROOT}/${EDF_REL}}"
-[[ -f "${EDF}" ]] || { echo "missing EDF: ${EDF}" >&2; exit 2; }
+[[ -f "${EDF}" ]] || { echo "missing EDF environment source: ${EDF}" >&2; exit 2; }
+
+case "${RUNTIME_BACKEND}" in
+  container)
+    IMAGE_DIGEST="$("${PY[@]}" "${ROOT}/scripts/resolve-image-digest.py" "${IMAGE_REF}")"
+    MODEL_CONTAINER="${MODEL_CONTAINER:-/models/GLM-5.3}"
+    [[ "${MODEL_CONTAINER}" = /* && "${MODEL_CONTAINER}" != "/" ]] || {
+      echo "MODEL_CONTAINER must be an absolute non-root path: ${MODEL_CONTAINER}" >&2
+      exit 2
+    }
+    case "${MODEL_CONTAINER}" in
+      *[,:]*) echo "MODEL_CONTAINER cannot contain ':' or ',': ${MODEL_CONTAINER}" >&2; exit 2 ;;
+    esac
+    MODEL="${MODEL_CONTAINER}"
+    ;;
+  uenv)
+    [[ "${PLATFORM}" == "cuda" ]] || {
+      echo "uenv runtime currently supports only PLATFORM=cuda" >&2
+      exit 2
+    }
+    [[ -n "${UENV_REF}" ]] || { echo "UENV_REF is required for the uenv runtime" >&2; exit 2; }
+    [[ -n "${UENV_VIEW}" ]] || { echo "UENV_VIEW is required for the uenv runtime" >&2; exit 2; }
+    UENV_DIGEST="$("${PY[@]}" "${ROOT}/scripts/resolve-uenv-digest.py" "${UENV_REF}")"
+    IMAGE_REF="uenv:${UENV_REF}"
+    IMAGE_DIGEST="sha256:${UENV_DIGEST}"
+    MODEL_CONTAINER=""
+    MODEL="${MODEL_SOURCE}"
+    JIT_CACHE_SEED_IMAGE_REFS=""
+    ;;
+  *)
+    echo "invalid RUNTIME_BACKEND=${RUNTIME_BACKEND}; expected container or uenv" >&2
+    exit 2
+    ;;
+esac
 
 SCENARIO="${SCENARIO:-baseline}"
 BENCHER_PROJECT="${BENCHER_PROJECT:-glm-5-3-inference}"
@@ -93,6 +123,12 @@ cp -- "${BASH_SOURCE[0]}" "${SLURM_BATCH_SCRIPT}"
 status "job ${SLURM_JOB_ID} starting; submit_dir=${ROOT} logdir=${LOGDIR}"
 SCENARIO_DIR="${LOGDIR}/scenario"
 mkdir -p "${SCENARIO_DIR}"
+EDF_ENV_FILE="${SCENARIO_DIR}/edf-environment.env"
+"${PY[@]}" "${ROOT}/scripts/edf-environment.py" \
+  --edf "${EDF}" \
+  --output "${EDF_ENV_FILE}"
+# shellcheck source=/dev/null
+source "${EDF_ENV_FILE}"
 JIT_CACHE_MODE="${JIT_CACHE_MODE:-readwrite}"
 case "${JIT_CACHE_MODE}" in
   off|read|readwrite) ;;
@@ -142,6 +178,7 @@ else
 fi
 
 export ROOT MODEL MODEL_SOURCE MODEL_CONTAINER EDF PLATFORM IMAGE_REF IMAGE_DIGEST LOGDIR HEAD_IP API_PORT DP_RPC_PORT SCENARIO_ID
+export RUNTIME_BACKEND UENV_REF UENV_VIEW UENV_DIGEST EDF_ENV_NAMES
 export SCENARIO_ENV="${SCENARIO_DIR}/scenario.env"
 export SCENARIO_RESOLVED="${SCENARIO_DIR}/scenario.json"
 export SCENARIO_VLLM_CONFIG_DIR SCENARIO_ENV_NAMES
@@ -153,21 +190,28 @@ export JIT_CACHE_MODE JIT_CACHE_ROOT JIT_CACHE_STAGING JIT_CACHE_TRIGGER
 export JIT_CACHE_LOCK_SECONDS JIT_CACHE_BUNDLE_SECONDS JIT_CACHE_KEEP_GENERATIONS
 export JIT_CACHE_SEED_IMAGE_REFS="${JIT_CACHE_SEED_IMAGE_REFS:-}"
 
-ENVVARS="ROOT,MODEL,MODEL_REPO,MODEL_REVISION,PLATFORM,IMAGE_REF,IMAGE_DIGEST,LOAD_FORMAT,LOGDIR,HEAD_IP,API_PORT,DP_RPC_PORT,SCENARIO_ID,SCENARIO_ENV,SCENARIO_RESOLVED,SCENARIO_VLLM_CONFIG_DIR,SCENARIO_ENV_NAMES,GPUS_PER_NODE,HF_HUB_OFFLINE,JIT_CACHE_MODE,JIT_CACHE_ROOT,JIT_CACHE_STAGING,JIT_CACHE_TRIGGER,JIT_CACHE_LOCK_SECONDS,JIT_CACHE_BUNDLE_SECONDS,JIT_CACHE_KEEP_GENERATIONS,JIT_CACHE_SEED_IMAGE_REFS,${SCENARIO_ENV_NAMES}"
+ENVVARS="ROOT,MODEL,MODEL_REPO,MODEL_REVISION,PLATFORM,IMAGE_REF,IMAGE_DIGEST,RUNTIME_BACKEND,UENV_REF,UENV_VIEW,UENV_DIGEST,LOAD_FORMAT,LOGDIR,HEAD_IP,API_PORT,DP_RPC_PORT,SCENARIO_ID,SCENARIO_ENV,SCENARIO_RESOLVED,SCENARIO_VLLM_CONFIG_DIR,SCENARIO_ENV_NAMES,GPUS_PER_NODE,HF_HUB_OFFLINE,JIT_CACHE_MODE,JIT_CACHE_ROOT,JIT_CACHE_STAGING,JIT_CACHE_TRIGGER,JIT_CACHE_LOCK_SECONDS,JIT_CACHE_BUNDLE_SECONDS,JIT_CACHE_KEEP_GENERATIONS,JIT_CACHE_SEED_IMAGE_REFS,${EDF_ENV_NAMES},${SCENARIO_ENV_NAMES}"
 
-echo "platform=${PLATFORM} image=${IMAGE_REF} digest=${IMAGE_DIGEST}"
-echo "nodes=${NODES[*]} head=${HEAD_NODE} (${HEAD_IP}) model=${MODEL_SOURCE}:${MODEL_CONTAINER}:ro"
+echo "platform=${PLATFORM} runtime=${RUNTIME_BACKEND} stack=${IMAGE_REF} digest=${IMAGE_DIGEST}"
+if [[ "${RUNTIME_BACKEND}" == "container" ]]; then
+  echo "nodes=${NODES[*]} head=${HEAD_NODE} (${HEAD_IP}) model=${MODEL_SOURCE}:${MODEL_CONTAINER}:ro"
+else
+  echo "nodes=${NODES[*]} head=${HEAD_NODE} (${HEAD_IP}) model=${MODEL_SOURCE} view=${UENV_VIEW}"
+fi
 echo "scenario=${SCENARIO_ID} mode=${SERVING_MODE} TP=${TP_SIZE} all2all=${ALL2ALL}"
 
 WORKER_ARGS=(
   --distribution=block:cyclic
   --cpu-bind=none
   --export="ALL,${ENVVARS}"
-  --container-env="${ENVVARS}"
   --network=disable_rdzv_get
   --mpi=pmix
-  --environment="${EDF}"
 )
+if [[ "${RUNTIME_BACKEND}" == "container" ]]; then
+  WORKER_ARGS+=(--container-env="${ENVVARS}" --environment="${EDF}")
+else
+  WORKER_ARGS+=(--uenv="${UENV_REF}" --view="${UENV_VIEW}")
+fi
 
 SERVE_PIDS=()
 
@@ -183,7 +227,7 @@ run_workers() {
   srun --overlap \
     "${WORKER_ARGS[@]}" \
     "${nodelist_args[@]}" \
-    -u env DEPLOYMENT_ROLE="${role}" bash "${ROOT}/scripts/serve-worker.sh" &
+    -u /usr/bin/env DEPLOYMENT_ROLE="${role}" /bin/bash "${ROOT}/scripts/serve-worker.sh" &
   SERVE_PIDS+=("$!")
   status "serving role launched; role=${role} nodes=${node_list:-all} step_pid=$!"
 }
@@ -202,7 +246,7 @@ PROXY_PID=""
 if [[ "${SERVING_MODE}" == "disaggregated" ]]; then
   srun --overlap --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" --cpus-per-task=8 \
     "${WORKER_ARGS[@]}" \
-    -u bash "${ROOT}/scripts/proxy-worker.sh" &
+    -u /bin/bash "${ROOT}/scripts/proxy-worker.sh" &
   PROXY_PID=$!
   status "proxy launched; node=${HEAD_NODE} step_pid=${PROXY_PID}"
 fi
@@ -289,7 +333,7 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
   status "benchmark suite starting; suite=${SUITE}"
   srun --overlap --nodes=1 --ntasks=1 --nodelist="${HEAD_NODE}" --cpus-per-task=72 \
     "${WORKER_ARGS[@]}" \
-    -u python3 "${ROOT}/scripts/benchmark.py" \
+    -u /usr/bin/env python3 "${ROOT}/scripts/benchmark.py" \
       --suite "${SUITE}" \
       --base-url "${BASE_URL}" \
       --model "${MODEL}" \
@@ -298,6 +342,7 @@ if [[ -n "${BENCHMARK_SUITE:-}" ]]; then
       --platform "${PLATFORM}" \
       --image-ref "${IMAGE_REF}" \
       --image-digest "${IMAGE_DIGEST}" \
+      --runtime-backend "${RUNTIME_BACKEND}" \
       --scenario-config "${SCENARIO_RESOLVED}" \
       --edf "${EDF}" \
       --logdir "${LOGDIR}" \
